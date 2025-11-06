@@ -38,3 +38,6 @@ tmp/
 temp/
 *.tmp
 
+# Archived test posts (keep for reference, but can be ignored)
+# posts/_archive/
+

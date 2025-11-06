@@ -27,6 +27,77 @@ import remarkRehype from "remark-rehype";
 import rehypeStringify from "rehype-stringify";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
+// ---------- Retry & Rate Limiting Utilities ----------
+/**
+ * Retry a function with exponential backoff
+ * @param {Function} fn - Async function to retry
+ * @param {number} maxAttempts - Maximum retry attempts (default: 3)
+ * @param {number} baseDelay - Base delay in ms (default: 1000)
+ * @returns {Promise} Result of the function
+ */
+async function retryWithBackoff(fn, maxAttempts = 3, baseDelay = 1000) {
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		try {
+			return await fn();
+		} catch (error) {
+			// Don't retry on client errors (4xx), only server errors (5xx) and rate limits (429)
+			const isRetryable =
+				error.status >= 500 ||
+				error.status === 429 ||
+				(error.message && error.message.includes("fetch failed"));
+			
+			if (!isRetryable || attempt === maxAttempts) {
+				throw error;
+			}
+			
+			const delay = Math.min(
+				baseDelay * Math.pow(2, attempt - 1),
+				8000, // Max 8 seconds
+			);
+			warn(
+				`Retry attempt ${attempt}/${maxAttempts} after ${delay}ms:`,
+				error.message,
+			);
+			await new Promise((resolve) => setTimeout(resolve, delay));
+		}
+	}
+}
+
+/**
+ * Rate limiter for Webflow API (120 requests/minute)
+ */
+class RateLimiter {
+	constructor(maxRequests = 120, windowMs = 60000) {
+		this.maxRequests = maxRequests;
+		this.windowMs = windowMs;
+		this.requests = [];
+	}
+
+	async waitIfNeeded() {
+		const now = Date.now();
+		// Remove requests outside the current window
+		this.requests = this.requests.filter(
+			(time) => now - time < this.windowMs,
+		);
+
+		if (this.requests.length >= this.maxRequests) {
+			const oldestRequest = this.requests[0];
+			const waitTime = this.windowMs - (now - oldestRequest) + 100; // Add 100ms buffer
+			if (waitTime > 0) {
+				log(`Rate limit: waiting ${Math.ceil(waitTime)}ms...`);
+				await new Promise((resolve) => setTimeout(resolve, waitTime));
+				// Recursively check again after waiting
+				return this.waitIfNeeded();
+			}
+		}
+
+		this.requests.push(now);
+	}
+}
+
+// Global rate limiter instance
+const rateLimiter = new RateLimiter(120, 60000); // 120 requests per minute
+
 // ---------- Config you may tweak ----------
 const POSTS_DIR = "posts";
 const IMAGE_DIR = "images"; // for resolving relative image paths
@@ -396,16 +467,25 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 		// Update existing
 		log(`Updating existing Webflow item: ${fm.post_id}`);
 		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items/${encodeURIComponent(fm.post_id)}`;
-		const res = await fetch(url, {
-			method: "PATCH",
-			headers,
-			body: JSON.stringify(payload),
+		
+		const data = await retryWithBackoff(async () => {
+			await rateLimiter.waitIfNeeded();
+			const res = await fetch(url, {
+				method: "PATCH",
+				headers,
+				body: JSON.stringify(payload),
+			});
+			
+			if (!res.ok) {
+				const text = await res.text();
+				const error = new Error(`Webflow update failed (${res.status}): ${text}`);
+				error.status = res.status;
+				throw error;
+			}
+			
+			return await res.json();
 		});
-		if (!res.ok) {
-			const text = await res.text();
-			throw new Error(`Webflow update failed (${res.status}): ${text}`);
-		}
-		const data = await res.json();
+		
 		log(`✅ Updated Webflow item ${fm.post_id} for ${filePath}`);
 		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
 		return data;
@@ -413,16 +493,25 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 		// Create new
 		log(`Creating new Webflow item for ${filePath}`);
 		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items`;
-		const res = await fetch(url, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(payload),
+		
+		const data = await retryWithBackoff(async () => {
+			await rateLimiter.waitIfNeeded();
+			const res = await fetch(url, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(payload),
+			});
+			
+			if (!res.ok) {
+				const text = await res.text();
+				const error = new Error(`Webflow create failed (${res.status}): ${text}`);
+				error.status = res.status;
+				throw error;
+			}
+			
+			return await res.json();
 		});
-		if (!res.ok) {
-			const text = await res.text();
-			throw new Error(`Webflow create failed (${res.status}): ${text}`);
-		}
-		const data = await res.json();
+		
 		const itemId = data?.id || data?.item?.id; // depending on response shape
 		log(`✅ Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
 		log(`   Created: ${data.createdOn || "N/A"} (system field)`);

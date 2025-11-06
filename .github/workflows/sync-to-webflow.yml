@@ -33,10 +33,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # Cache removed - package-lock.json not committed
+          cache: npm
+          cache-dependency-path: "tools/package-lock.json"
 
       - name: Install deps
-        run: npm install
+        run: npm ci
         working-directory: tools
 
       - name: Detect changed markdown files

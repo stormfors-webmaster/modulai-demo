@@ -1,5 +1,8 @@
 # Webflow CMS ↔ GitHub Two-Way Sync
 
+[![Sync to Webflow](https://github.com/stormfors-webmaster/modulai-demo/actions/workflows/sync-to-webflow.yml/badge.svg)](https://github.com/stormfors-webmaster/modulai-demo/actions/workflows/sync-to-webflow.yml)
+[![Lint Frontmatter](https://github.com/stormfors-webmaster/modulai-demo/actions/workflows/lint-frontmatter.yml/badge.svg)](https://github.com/stormfors-webmaster/modulai-demo/actions/workflows/lint-frontmatter.yml)
+
 A two-way synchronization system between GitHub repositories and Webflow CMS for blog content. Developers author posts in Markdown, commit to GitHub, and the system automatically syncs them to Webflow CMS. Optional bidirectional sync allows Webflow edits to flow back to GitHub.
 
 ## Features
@@ -273,7 +276,43 @@ Webflow API → Publishes clean HTML
 
 See [GitHub Actions documentation](docs/github_actions_YAML.md) for complete workflow templates.
 
+## Production Features
+
+- ✅ **Retry Logic**: Automatic retry with exponential backoff for API failures
+- ✅ **Rate Limiting**: Respects Webflow API limits (120 requests/minute)
+- ✅ **Error Handling**: Comprehensive error handling with detailed logging
+- ✅ **Security**: Secrets are masked in logs, no hardcoded credentials
+- ✅ **Reliability**: Option B file detection for robust change tracking
+- ✅ **Monitoring**: GitHub Actions badges and workflow status tracking
+
+## Production Checklist
+
+Before deploying to production:
+
+- [x] ✅ Test posts archived/removed
+- [x] ✅ Retry logic implemented
+- [x] ✅ Rate limiting implemented
+- [x] ✅ Secrets properly configured
+- [x] ✅ Workflow badges added
+- [ ] ⚠️ Set up error notifications (email/Slack)
+- [ ] ⚠️ Monitor first few syncs for issues
+- [ ] ⚠️ Review Webflow collection field mappings
+
 ## Development
+
+### Cleanup Test Posts
+
+List test posts:
+```bash
+npm run cleanup
+# or
+node tools/cleanup-test-posts.js --list
+```
+
+Archive test posts:
+```bash
+node tools/cleanup-test-posts.js --archive
+```
 
 ### Middleware Approach
 

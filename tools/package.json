@@ -9,7 +9,8 @@
 		"sync:all": "node sync-webflow.js --all",
 		"sync:dry": "node sync-webflow.js --dry-run --all",
 		"validate": "node validate-frontmatter.js",
-		"test-sync": "node test-sync.js"
+		"test-sync": "node test-sync.js",
+		"cleanup": "node cleanup-test-posts.js --list"
 	},
 	"dependencies": {
 		"gray-matter": "^4.0.3",
