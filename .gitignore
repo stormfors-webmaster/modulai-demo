@@ -15,6 +15,7 @@ build/
 .env
 .env.local
 .env.*.local
+# Note: .env.local.example can be committed as a template
 
 # IDE
 .vscode/

@@ -8,7 +8,8 @@
     "sync": "node sync-webflow.js",
     "sync:all": "node sync-webflow.js --all",
     "sync:dry": "node sync-webflow.js --dry-run --all",
-    "validate": "node validate-frontmatter.js"
+    "validate": "node validate-frontmatter.js",
+    "test-sync": "node test-sync.js"
   },
   "dependencies": {
     "gray-matter": "^4.0.3",

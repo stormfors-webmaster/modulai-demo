@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Validate frontmatter schema in posts/**/*.md
+ * Validate frontmatter schema in posts/*.md files
  * Intended for GitHub Actions PR linting.
  */
 
@@ -43,8 +43,8 @@ function warn(file, msg) {
 }
 
 function isIsoDate(str) {
-  // strictish ISO check
-  return /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?$/.test(str);
+  // strictish ISO check - allows YYYY-MM-DD or full timestamp
+  return /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d{3})?(Z|[+-]\d{2}:\d{2})?)?$/.test(str);
 }
 
 function validateFile(filePath) {
@@ -80,9 +80,19 @@ function validateFile(filePath) {
   }
 
   // Validate: date (ISO)
+  // gray-matter auto-parses dates as Date objects, so we need to handle both
   if (data.date) {
-    if (typeof data.date !== "string" || !isIsoDate(data.date)) {
-      fail(filePath, `date must be ISO format (YYYY-MM-DD or full timestamp)`);
+    let dateStr;
+    if (data.date instanceof Date) {
+      // Convert Date object to ISO string (YYYY-MM-DD format)
+      dateStr = data.date.toISOString().split('T')[0];
+    } else if (typeof data.date === "string") {
+      dateStr = data.date;
+    } else {
+      dateStr = String(data.date);
+    }
+    if (!isIsoDate(dateStr)) {
+      fail(filePath, `date must be ISO format (YYYY-MM-DD or full timestamp), got: ${dateStr}`);
     }
   }
 
