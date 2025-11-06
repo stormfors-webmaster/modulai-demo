@@ -60,5 +60,5 @@ function testSync() {
 
 ---
 
-GOOD NEWS! If you're reading this in Webflow, the sync worked! 🎉
+GOOD NEWS Test 3 ! If you're reading this in Webflow, the sync worked! 🎉
 
