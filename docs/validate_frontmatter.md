@@ -1,4 +1,4 @@
-Here you go — a clean, lightweight **`tools/validate-frontmatter.js`** that you can run in PR workflows to validate:
+a clean, lightweight **`tools/validate-frontmatter.js`** that you can run in PR workflows to validate:
 
 ✅ Required fields
 ✅ Field types
