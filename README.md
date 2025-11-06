@@ -220,6 +220,40 @@ code here
 <pre><code class="language-python">code here</code></pre>
 ```
 
+## Dependencies
+
+The sync tools use the following npm packages for processing Markdown:
+
+### Core Parser
+- **`gray-matter`** (^4.0.3) - Extracts and parses YAML frontmatter from Markdown files
+
+### Markdown Processing Pipeline (unified ecosystem)
+- **`unified`** (^11.0.0) - Text processing orchestrator that chains transformations
+- **`remark-parse`** (^11.0.0) - Converts Markdown text to syntax tree (AST)
+- **`remark-gfm`** (^4.0.0) - Adds GitHub Flavored Markdown support (tables, task lists, strikethrough)
+- **`remark-rehype`** (^11.0.0) - Converts Markdown tree to HTML tree
+- **`rehype-sanitize`** (^6.0.0) - Sanitizes HTML output, removing dangerous elements
+- **`rehype-stringify`** (^10.0.0) - Converts HTML tree to HTML string
+
+### Processing Flow
+```
+Markdown file
+    ↓
+gray-matter → Extracts frontmatter + content
+    ↓
+remark-parse → Markdown text to syntax tree
+    ↓
+remark-gfm → Adds GitHub markdown features
+    ↓
+remark-rehype → Markdown tree to HTML tree
+    ↓
+rehype-sanitize → Removes unsafe HTML
+    ↓
+rehype-stringify → Syntax tree to HTML string
+    ↓
+Webflow API → Publishes clean HTML
+```
+
 ## GitHub Actions Workflows
 
 ### Sync on Push
