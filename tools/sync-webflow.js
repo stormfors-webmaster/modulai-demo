@@ -109,27 +109,95 @@ function getAllMarkdown() {
 }
 
 function getChangedMarkdown() {
+	log("Detecting changed markdown files...");
+	
+	// Strategy 1: Try to use git diff with parent commit
 	try {
 		// Ensure we have history (Actions checkout may be shallow)
+		log("Fetching git history...");
 		execSync("git fetch --depth=2 origin " + (BRANCH || "HEAD"), {
 			stdio: "ignore",
 		});
-	} catch {}
-	let files = [];
-	try {
+		
+		// Try to get parent commit
+		let parentCommit;
+		try {
+			parentCommit = execSync("git rev-parse HEAD~1", {
+				encoding: "utf8",
+				stdio: "pipe",
+			}).trim();
+			log(`Found parent commit: ${parentCommit.substring(0, 7)}...`);
+		} catch (e) {
+			log("No parent commit found, checking if this is the first commit...");
+			// Check if we're at the root commit
+			const currentCommit = execSync("git rev-parse HEAD", {
+				encoding: "utf8",
+				stdio: "pipe",
+			}).trim();
+			const commitCount = execSync("git rev-list --count HEAD", {
+				encoding: "utf8",
+				stdio: "pipe",
+			}).trim();
+			
+			if (commitCount === "1") {
+				log("This appears to be the first commit, processing all markdown files");
+				return getAllMarkdown();
+			}
+			throw new Error("Could not find parent commit");
+		}
+		
 		const diff = execSync(
 			`git diff --name-only HEAD~1 HEAD -- '${POSTS_DIR}/**/*.md'`,
-			{ encoding: "utf8" },
+			{ encoding: "utf8", stdio: "pipe" },
 		);
-		files = diff
+		const files = diff
 			.split("\n")
 			.map((s) => s.trim())
 			.filter(Boolean);
+		
+		if (files.length > 0) {
+			log(`Found ${files.length} changed file(s) via git diff:`);
+			files.forEach((f) => log(`  - ${f}`));
+			return files;
+		} else {
+			log("No changed markdown files detected via git diff");
+			return [];
+		}
 	} catch (e) {
-		warn("git diff failed; falling back to all files", e.message);
-		files = getAllMarkdown();
+		warn("git diff failed; trying alternative detection methods", e.message);
+		
+		// Strategy 2: Check if we're in GitHub Actions and use event context
+		// GitHub Actions provides GITHUB_EVENT_PATH with commit info
+		if (process.env.GITHUB_EVENT_PATH) {
+			try {
+				const eventData = JSON.parse(
+					fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"),
+				);
+				const modifiedFiles =
+					eventData?.head_commit?.modified ||
+					eventData?.commits?.flatMap((c) => c.modified || []) ||
+					[];
+				const markdownFiles = modifiedFiles.filter((f) =>
+					f.startsWith(`${POSTS_DIR}/`) && f.endsWith(".md"),
+				);
+				if (markdownFiles.length > 0) {
+					log(`Found ${markdownFiles.length} changed file(s) via GitHub event:`);
+					markdownFiles.forEach((f) => log(`  - ${f}`));
+					return markdownFiles;
+				}
+			} catch (eventErr) {
+				warn("Could not parse GitHub event data", eventErr.message);
+			}
+		}
+		
+		// Strategy 3: Fallback to all files (safer than failing silently)
+		warn("Falling back to processing all markdown files");
+		const allFiles = getAllMarkdown();
+		if (allFiles.length > 0) {
+			log(`Processing all ${allFiles.length} markdown file(s) as fallback`);
+		}
+		return allFiles;
 	}
-	return files;
 }
 
 async function mdToHtml(markdown) {
@@ -218,6 +286,11 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 	}
 	if (!fm.title) throw new Error(`Missing required 'title' in ${filePath}`);
 
+	log(`Processing: ${filePath}`);
+	log(`  Title: ${fm.title}`);
+	log(`  Published: ${published}`);
+	log(`  Has post_id: ${Boolean(fm.post_id)}`);
+
 	const bodyHtml = html;
 	const name = String(fm.title);
 	const slug = fm.slug ? String(fm.slug) : kebab(fm.title);
@@ -239,6 +312,11 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 		: trimToExcerpt(bodyHtml, 160);
 	const seoTitle = fm?.seo?.title;
 	const seoDescription = fm?.seo?.description;
+
+	log(`  Slug: ${slug}`);
+	if (mainImage) log(`  Main Image: ${mainImage}`);
+	if (author) log(`  Author: ${author}`);
+	if (tags) log(`  Tags: ${tags}`);
 
 	// Build fieldData object, only including fields that exist in the collection
 	const fieldData = {};
@@ -280,11 +358,13 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 
 	if (dryRun) {
 		log("(dry-run) UPSERT", { slug, hasPostId: Boolean(fm.post_id) });
+		log("(dry-run) Payload:", JSON.stringify(payload, null, 2));
 		return;
 	}
 
 	if (fm.post_id) {
 		// Update existing
+		log(`Updating existing Webflow item: ${fm.post_id}`);
 		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items/${encodeURIComponent(fm.post_id)}`;
 		const res = await fetch(url, {
 			method: "PATCH",
@@ -296,11 +376,12 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 			throw new Error(`Webflow update failed (${res.status}): ${text}`);
 		}
 		const data = await res.json();
-		log(`Updated Webflow item ${fm.post_id} for ${filePath}`);
+		log(`✅ Updated Webflow item ${fm.post_id} for ${filePath}`);
 		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
 		return data;
 	} else {
 		// Create new
+		log(`Creating new Webflow item for ${filePath}`);
 		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items`;
 		const res = await fetch(url, {
 			method: "POST",
@@ -313,7 +394,7 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 		}
 		const data = await res.json();
 		const itemId = data?.id || data?.item?.id; // depending on response shape
-		log(`Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
+		log(`✅ Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
 		log(`   Created: ${data.createdOn || "N/A"} (system field)`);
 		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
 
@@ -356,9 +437,12 @@ async function dispatchWriteback({ path: filePath, itemId }) {
 }
 
 async function processFile(filePath, opts) {
+	log(`\n--- Processing file: ${filePath} ---`);
 	const src = fs.readFileSync(filePath, "utf8");
 	const fm = matter(src);
 	const fileDir = path.dirname(filePath);
+
+	log(`Parsed frontmatter: ${Object.keys(fm.data).length} field(s)`);
 
 	// Normalize booleans if authors used True/False
 	["published", "push_to_webflow"].forEach((k) => {
@@ -373,6 +457,7 @@ async function processFile(filePath, opts) {
 	// Rewrite relative images in markdown to commit-pinned raw URLs
 	const mdWithRaw = rewriteImageLinksInMarkdown(fm.content, fileDir);
 	const html = await mdToHtml(mdWithRaw);
+	log(`Converted markdown to HTML (${html.length} chars)`);
 
 	await upsertWebflowItem({
 		fm: fm.data,
@@ -380,9 +465,18 @@ async function processFile(filePath, opts) {
 		filePath,
 		dryRun: opts.dryRun,
 	});
+	log(`✅ Completed processing: ${filePath}\n`);
 }
 
 async function main() {
+	log("=== Webflow Sync Script ===");
+	log(`Repository: ${REPO || "(not set)"}`);
+	log(`Commit SHA: ${COMMIT_SHA || "(not set)"}`);
+	log(`Branch: ${BRANCH || "(not set)"}`);
+	log(`Collection ID: ${COLLECTION_ID ? COLLECTION_ID.substring(0, 8) + "..." : "(not set)"}`);
+	log(`Webflow Token: ${WEBFLOW_TOKEN ? "***" + WEBFLOW_TOKEN.slice(-4) : "(not set)"}`);
+	log("");
+
 	try {
 		requireEnv("WEBFLOW_TOKEN");
 		requireEnv("WEBFLOW_COLLECTION_ID");
@@ -392,19 +486,37 @@ async function main() {
 	}
 	const { all, dryRun } = parseArgs();
 
+	if (dryRun) {
+		log("🔍 DRY RUN MODE - No changes will be made to Webflow\n");
+	}
+
 	const files = all ? getAllMarkdown() : getChangedMarkdown();
 	if (files.length === 0) {
 		log(all ? "No markdown files found." : "No changed markdown files.");
 		return;
 	}
-	log(`Found ${files.length} file(s) to process.`);
+	log(`\n📝 Found ${files.length} file(s) to process.\n`);
+
+	let successCount = 0;
+	let errorCount = 0;
 
 	for (const f of files) {
 		try {
 			await processFile(f, { dryRun });
+			successCount++;
 		} catch (e) {
+			errorCount++;
 			fail(`Failed processing ${f}`, e);
 		}
+	}
+
+	log("\n=== Summary ===");
+	log(`✅ Successfully processed: ${successCount}`);
+	if (errorCount > 0) {
+		log(`❌ Failed: ${errorCount}`);
+		process.exitCode = 1;
+	} else {
+		log("✅ All files processed successfully!");
 	}
 }
 
