@@ -1,0 +1,28 @@
+name: Lint Markdown frontmatter
+
+on:
+  pull_request:
+    paths:
+      - "posts/**/*.md"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+        working-directory: tools
+
+      - name: Validate frontmatter schema
+        run: node tools/validate-frontmatter.js
+

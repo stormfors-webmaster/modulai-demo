@@ -1,0 +1,40 @@
+name: Full re-sync all posts
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no writes)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: resync-all
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  WEBFLOW_TOKEN: ${{ secrets.WEBFLOW_TOKEN }}
+  WEBFLOW_SITE_ID: ${{ secrets.WEBFLOW_SITE_ID }}
+  WEBFLOW_COLLECTION_ID: ${{ secrets.WEBFLOW_COLLECTION_ID }}
+
+jobs:
+  resync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+        working-directory: tools
+
+      - name: Re-sync all
+        run: node tools/sync-webflow.js --all ${{ inputs.dry_run && '--dry-run' || '' }}
+

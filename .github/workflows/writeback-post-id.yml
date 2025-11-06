@@ -1,0 +1,47 @@
+name: Writeback post_id
+
+on:
+  repository_dispatch:
+    types: [webflow_item_created]
+
+permissions:
+  contents: write
+
+jobs:
+  writeback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN_WITH_WRITE }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+        working-directory: tools
+
+      - name: Update frontmatter with post_id
+        env:
+          FILE_PATH: ${{ github.event.client_payload.path }}
+          WEBFLOW_ITEM_ID: ${{ github.event.client_payload.itemId }}
+        run: |
+          node --input-type=module -e "
+            import fs from 'fs';
+            import matter from 'gray-matter';
+            const p = process.env.FILE_PATH;
+            const id = process.env.WEBFLOW_ITEM_ID;
+            const src = fs.readFileSync(p, 'utf8');
+            const fm = matter(src);
+            fm.data.post_id = id;
+            fs.writeFileSync(p, matter.stringify(fm.content, fm.data), 'utf8');
+          "
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$FILE_PATH"
+          git commit -m "chore(sync): record Webflow post_id" || echo "No changes"
+          git push
+

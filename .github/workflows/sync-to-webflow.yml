@@ -1,0 +1,42 @@
+name: Sync posts to Webflow (direct)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "posts/**/*.md"
+      - "images/**"
+
+  workflow_dispatch: {}
+
+concurrency:
+  group: sync-to-webflow-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  WEBFLOW_SITE_ID: ${{ secrets.WEBFLOW_SITE_ID }}
+  WEBFLOW_COLLECTION_ID: ${{ secrets.WEBFLOW_COLLECTION_ID }}
+  WEBFLOW_TOKEN: ${{ secrets.WEBFLOW_TOKEN }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+        working-directory: tools
+
+      - name: Sync changed files to Webflow
+        run: node tools/sync-webflow.js
+
