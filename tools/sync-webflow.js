@@ -111,7 +111,37 @@ function getAllMarkdown() {
 function getChangedMarkdown() {
 	log("Detecting changed markdown files...");
 	
-	// Strategy 1: Try to use git diff with parent commit
+	// Strategy 1 (Highest Priority): Use files provided by GitHub Actions workflow
+	// This is the most reliable method as the workflow handles git operations
+	if (process.env.CHANGED_FILES !== undefined) {
+		// CHANGED_FILES is set (may be empty string)
+		const changedFilesValue = String(process.env.CHANGED_FILES || "").trim();
+		if (changedFilesValue === "") {
+			log("No changed files detected by GitHub Actions workflow");
+			// For manual triggers, if --all flag is used, we'll process all files
+			if (process.env.MANUAL_TRIGGER === "true") {
+				log("Manual trigger detected - use --all flag to sync all files");
+			}
+			return [];
+		}
+		
+		const files = changedFilesValue
+			.split("\n")
+			.map((s) => s.trim())
+			.filter(Boolean)
+			.filter((f) => f.endsWith(".md") && f.startsWith(POSTS_DIR));
+		
+		if (files.length > 0) {
+			log(`Found ${files.length} changed file(s) via GitHub Actions context:`);
+			files.forEach((f) => log(`  - ${f}`));
+			return files;
+		} else {
+			log("No markdown files found in CHANGED_FILES environment variable");
+			return [];
+		}
+	}
+	
+	// Strategy 2: Try to use git diff with parent commit
 	try {
 		// Ensure we have history (Actions checkout may be shallow)
 		log("Fetching git history...");
@@ -166,7 +196,7 @@ function getChangedMarkdown() {
 	} catch (e) {
 		warn("git diff failed; trying alternative detection methods", e.message);
 		
-		// Strategy 2: Check if we're in GitHub Actions and use event context
+		// Strategy 3: Check if we're in GitHub Actions and use event context
 		// GitHub Actions provides GITHUB_EVENT_PATH with commit info
 		if (process.env.GITHUB_EVENT_PATH) {
 			try {
@@ -190,7 +220,7 @@ function getChangedMarkdown() {
 			}
 		}
 		
-		// Strategy 3: Fallback to all files (safer than failing silently)
+		// Strategy 4: Fallback to all files (safer than failing silently)
 		warn("Falling back to processing all markdown files");
 		const allFiles = getAllMarkdown();
 		if (allFiles.length > 0) {

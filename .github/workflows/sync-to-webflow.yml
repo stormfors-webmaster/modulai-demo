@@ -40,6 +40,52 @@ jobs:
         run: npm ci
         working-directory: tools
 
+      - name: Detect changed markdown files
+        id: changed-files
+        run: |
+          # Use git diff to detect changed markdown files
+          # This is more reliable than relying on script-side detection
+          
+          # Check if we have a parent commit (not the first commit)
+          PARENT_EXISTS=$(git rev-parse --verify HEAD~1 2>/dev/null && echo "yes" || echo "no")
+          
+          if [ "$PARENT_EXISTS" = "yes" ]; then
+            # Normal case: compare with parent commit
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD -- 'posts/**/*.md' 2>/dev/null || echo "")
+          else
+            # First commit or manual trigger: check if we can use GitHub event context
+            if [ -n "${{ github.event.head_commit.modified }}" ]; then
+              # Use GitHub event context if available
+              CHANGED_FILES=$(echo "${{ github.event.head_commit.modified }}" | grep -E '^posts/.*\.md$' || echo "")
+            elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              # Manual trigger: let script handle with --all flag or process all
+              # We'll set a special marker so script knows it's manual
+              echo "Manual trigger detected - script will process all files if --all is used"
+              echo "files=" >> $GITHUB_OUTPUT
+              echo "MANUAL_TRIGGER=true" >> $GITHUB_ENV
+            else
+              # Fallback: try to get all markdown files
+              CHANGED_FILES=$(find posts -name "*.md" -type f 2>/dev/null || echo "")
+            fi
+          fi
+          
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No changed markdown files detected"
+            echo "files=" >> $GITHUB_OUTPUT
+          else
+            echo "Detected changed files:"
+            echo "$CHANGED_FILES" | while read -r file; do
+              [ -n "$file" ] && echo "  - $file"
+            done
+            # Output files as newline-separated list
+            echo "files<<EOF" >> $GITHUB_OUTPUT
+            echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
       - name: Sync changed files to Webflow
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
+          MANUAL_TRIGGER: ${{ env.MANUAL_TRIGGER }}
         run: node tools/sync-webflow.js
 
