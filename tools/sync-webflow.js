@@ -35,23 +35,26 @@ const WEBFLOW_TOKEN = process.env.WEBFLOW_TOKEN;
 const REPO = process.env.GITHUB_REPOSITORY || process.env.GH_REPOSITORY; // owner/repo
 const COMMIT_SHA = process.env.GITHUB_SHA || "main";
 const BRANCH = process.env.GITHUB_REF_NAME || "main";
-// Field API IDs in Webflow (match your collection setup)
+// Field slugs for Webflow v2 API (match your collection setup)
+// Run `node tools/fetch-schema.js` to get the correct field slugs for your collection
+// Note: Webflow v2 API uses field slugs in fieldData, not field IDs!
+// Update these to match your actual Webflow collection field slugs
 const FIELD_IDS = {
-  name: "name",
-  slug: "slug",
-  body: "body_rich",
-  mainImage: "main_image",
-  publishDate: "publish_date",
-  authorText: "author_text",
-  externalLink: "external_link",
-  isPublished: "is_published",
-  pushToWebflow: "push_to_webflow",
-  postId: "post_id",
-  lastUpdate: "last_update",
-  excerpt: "excerpt",
-  seoTitle: "seo_title",
-  seoDescription: "seo_description",
-  tags: "tags_multi"
+  name: "name",                    // Name field slug
+  slug: "slug",                    // Slug field slug
+  body: "post-body",               // Body/RichText field slug
+  mainImage: "main-image",          // Main Image field slug
+  publishDate: "publish-date",      // Publish Date field slug (for scheduled publishing)
+  authorText: "author",             // Author field slug
+  externalLink: "link",             // External Link field slug
+  isPublished: "is-published",      // Published status field slug
+  pushToWebflow: "push-to-webflow", // Push to Webflow flag field slug
+  postId: "post-id",                // Post ID field slug
+  // Note: lastUpdated is a Webflow system field (read-only), automatically managed
+  excerpt: "post-summary",          // Excerpt/Summary field slug
+  seoTitle: "seo-title",           // SEO Title field slug
+  seoDescription: "seo-description", // SEO Description field slug
+  tags: "tags"                      // Tags field slug
 };
 // ------------------------------------------
 
@@ -199,30 +202,35 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
   const publishDate = fm.date ? new Date(fm.date).toISOString() : new Date().toISOString();
   const author = fm.author ? String(fm.author) : undefined;
   const externalLink = fm.link ? String(fm.link) : undefined;
-  const lastUpdate = fm.last_update ? new Date(fm.last_update).toISOString() : new Date().toISOString();
-  const tags = Array.isArray(fm.tags) ? fm.tags.map(String) : undefined;
+  // Note: lastUpdated is a Webflow system field, automatically managed
+  // We don't sync it - Webflow updates it automatically on every change
+  const tags = Array.isArray(fm.tags) ? fm.tags.join(", ") : (fm.tags ? String(fm.tags) : undefined);
   const excerpt = fm.excerpt ? String(fm.excerpt) : trimToExcerpt(bodyHtml, 160);
   const seoTitle = fm?.seo?.title;
   const seoDescription = fm?.seo?.description;
 
-  const fieldData = {
-    [FIELD_IDS.name]: name,
-    [FIELD_IDS.slug]: slug,
-    [FIELD_IDS.body]: bodyHtml,
-    ...(mainImage ? { [FIELD_IDS.mainImage]: mainImage } : {}),
-    [FIELD_IDS.publishDate]: publishDate,
-    ...(author ? { [FIELD_IDS.authorText]: author } : {}),
-    ...(externalLink ? { [FIELD_IDS.externalLink]: externalLink } : {}),
-    [FIELD_IDS.isPublished]: published,
-    [FIELD_IDS.pushToWebflow]: true, // write-protect on WF→GH if you do two-way
-    ...(fm.post_id ? { [FIELD_IDS.postId]: String(fm.post_id) } : {}),
-    [FIELD_IDS.lastUpdate]: lastUpdate,
-    ...(tags ? { [FIELD_IDS.tags]: tags } : {}),
-    ...(excerpt ? { [FIELD_IDS.excerpt]: excerpt } : {}),
-    ...(seoTitle ? { [FIELD_IDS.seoTitle]: seoTitle } : {}),
-    ...(seoDescription ? { [FIELD_IDS.seoDescription]: seoDescription } : {}),
-  };
+  // Build fieldData object, only including fields that exist in the collection
+  const fieldData = {};
+  
+  if (FIELD_IDS.name) fieldData[FIELD_IDS.name] = name;
+  if (FIELD_IDS.slug) fieldData[FIELD_IDS.slug] = slug;
+  if (FIELD_IDS.body) fieldData[FIELD_IDS.body] = bodyHtml;
+  if (FIELD_IDS.mainImage && mainImage) fieldData[FIELD_IDS.mainImage] = mainImage;
+  if (FIELD_IDS.publishDate) fieldData[FIELD_IDS.publishDate] = publishDate;
+  if (FIELD_IDS.authorText && author) fieldData[FIELD_IDS.authorText] = author;
+  if (FIELD_IDS.externalLink && externalLink) fieldData[FIELD_IDS.externalLink] = externalLink;
+  if (FIELD_IDS.isPublished) fieldData[FIELD_IDS.isPublished] = published;
+  if (FIELD_IDS.pushToWebflow) fieldData[FIELD_IDS.pushToWebflow] = true;
+  if (FIELD_IDS.postId && fm.post_id) fieldData[FIELD_IDS.postId] = String(fm.post_id);
+  // Note: lastUpdated is a Webflow system field - automatically managed, don't sync
+  if (FIELD_IDS.tags && tags) fieldData[FIELD_IDS.tags] = tags;
+  if (FIELD_IDS.excerpt && excerpt) fieldData[FIELD_IDS.excerpt] = excerpt;
+  if (FIELD_IDS.seoTitle && seoTitle) fieldData[FIELD_IDS.seoTitle] = seoTitle;
+  if (FIELD_IDS.seoDescription && seoDescription) fieldData[FIELD_IDS.seoDescription] = seoDescription;
 
+  // Webflow API v2 structure
+  // Note: isDraft controls whether item is draft or published
+  // When isPublished field exists, we can use it, but isDraft still controls the item state
   const payload = {
     isArchived: false,
     isDraft: !published,
@@ -250,6 +258,7 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
     }
     const data = await res.json();
     log(`Updated Webflow item ${fm.post_id} for ${filePath}`);
+    log(`   Last Updated: ${data.lastUpdated || 'N/A'} (system field)`);
     return data;
   } else {
     // Create new
@@ -262,6 +271,8 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
     const data = await res.json();
     const itemId = data?.id || data?.item?.id; // depending on response shape
     log(`Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
+    log(`   Created: ${data.createdOn || 'N/A'} (system field)`);
+    log(`   Last Updated: ${data.lastUpdated || 'N/A'} (system field)`);
 
     // Optionally: emit repository_dispatch so a separate workflow can write back post_id
     // Requires a token with repo:dispatch scope; usually GITHUB_TOKEN works in the same repo.

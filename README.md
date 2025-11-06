@@ -96,11 +96,13 @@ seo:
 | `published` | `is_published` | Switch | ↔ |
 | `push_to_webflow` | `push_to_webflow` | Switch | GH→WF only |
 | `post_id` | `post_id` | Plain text | ↔ |
-| `last_update` | `last_update` | Date/Time | ↔ |
-| `tags` | `tags_multi` | Multi-Reference/Text | ↔ |
+| `last_update` | `lastUpdated` (system) | Date/Time (read-only) | Read from API |
+| `tags` | `tags` | Plain text (comma-separated) | ↔ |
 | `excerpt` | `excerpt` | Plain text | ↔ |
 | `seo.title` | `seo_title` | Plain text | ↔ |
 | `seo.description` | `seo_description` | Plain text | ↔ |
+
+**Note:** `createdOn` and `lastUpdated` are Webflow system fields that are automatically managed. They cannot be synced but are available in API responses.
 
 ## Setup
 
@@ -168,19 +170,23 @@ Create a CMS collection in Webflow with these fields:
 
 1. **Name** (`name`) - System field
 2. **Slug** (`slug`) - System field
-3. **Body** (`body_rich`) - Rich Text
-4. **Main Image** (`main_image`) - Image
-5. **Publish Date** (`publish_date`) - Date/Time
-6. **Author** (`author_text`) - Plain text (or Reference to Authors collection)
-7. **External Link** (`external_link`) - Link
-8. **Is Published** (`is_published`) - Switch
-9. **Push to Webflow** (`push_to_webflow`) - Switch
-10. **Post ID** (`post_id`) - Plain text
-11. **Last Update** (`last_update`) - Date/Time
-12. **Tags** (`tags_multi`) - Multi-Reference or Multi-Text
-13. **Excerpt** (`excerpt`) - Plain text
-14. **SEO Title** (`seo_title`) - Plain text
-15. **SEO Description** (`seo_description`) - Plain text
+3. **Body** (`post-body`) - Rich Text
+4. **Main Image** (`main-image`) - Image
+5. **Publish Date** (`publish-date`) - Date/Time
+6. **Author** (`author`) - Plain text (or Reference to Authors collection)
+7. **External Link** (`link`) - Link
+8. **Is Published** (`is-published`) - Switch
+9. **Push to Webflow** (`push-to-webflow`) - Switch
+10. **Post ID** (`post-id`) - Plain text
+11. **Tags** (`tags`) - Plain text (comma-separated)
+12. **Excerpt** (`post-summary`) - Plain text
+13. **SEO Title** (`seo-title`) - Plain text
+14. **SEO Description** (`seo-description`) - Plain text
+
+**System Fields (Automatic):**
+- `createdOn` - Automatically set on creation (read-only)
+- `lastUpdated` - Automatically updated on modification (read-only)
+- `lastPublished` - Set when published (read-only)
 
 ### Field API IDs
 

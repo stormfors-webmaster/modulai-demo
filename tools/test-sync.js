@@ -54,23 +54,25 @@ if (!WEBFLOW_COLLECTION_ID) {
   throw new Error("Missing WEBFLOW_COLLECTION_ID in .env.local");
 }
 
-// Field API IDs in Webflow (match your collection setup)
+// Field slugs for Webflow v2 API (match your collection setup)
+// Run `node tools/fetch-schema.js` to get the correct field slugs for your collection
+// Note: Webflow v2 API uses field slugs in fieldData, not field IDs!
 const FIELD_IDS = {
-  name: "name",
-  slug: "slug",
-  body: "body_rich",
-  mainImage: "main_image",
-  publishDate: "publish_date",
-  authorText: "author_text",
-  externalLink: "external_link",
-  isPublished: "is_published",
-  pushToWebflow: "push_to_webflow",
-  postId: "post_id",
-  lastUpdate: "last_update",
-  excerpt: "excerpt",
-  seoTitle: "seo_title",
-  seoDescription: "seo_description",
-  tags: "tags_multi"
+  name: "name",                    // Name (PlainText) [REQUIRED]
+  slug: "slug",                    // Slug (PlainText) [REQUIRED]
+  body: "post-body",               // Post Body (RichText)
+  mainImage: "main-image",          // Main Image (Image)
+  publishDate: "publish-date",      // Publish Date (DateTime) - for scheduled publishing
+  authorText: "author",             // Author (PlainText)
+  externalLink: "link",             // Link (Link)
+  isPublished: "is-published",      // Is Published (Switch)
+  pushToWebflow: "push-to-webflow", // Push to Webflow (Switch)
+  postId: "post-id",                // Post ID (PlainText)
+  // Note: lastUpdated is a Webflow system field (read-only), not synced
+  tags: "tags",                     // Tags (PlainText)
+  excerpt: "post-summary",          // Post Summary (PlainText)
+  seoTitle: "seo-title",            // SEO Title (PlainText)
+  seoDescription: "seo-description", // SEO Description (PlainText)
 };
 
 function log(...a) { console.log("[test-sync]", ...a); }
@@ -109,15 +111,26 @@ async function mdToHtml(markdown) {
     .use(rehypeSanitize, schema)
     .use(rehypeStringify)
     .process(markdown);
-  return String(file);
+  let html = String(file);
+  
+  // Remove image tags with relative URLs for local testing (Webflow can't import them)
+  html = html.replace(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi, (match, src) => {
+    if (/^https?:\/\//i.test(src)) {
+      return match; // Keep absolute URLs
+    }
+    // Remove relative URL images
+    return '';
+  });
+  
+  return html;
 }
 
 function resolveToRawUrl(filePathOrUrl) {
   if (!filePathOrUrl) return filePathOrUrl;
   if (/^https?:\/\//i.test(filePathOrUrl)) return filePathOrUrl;
-  // For local testing, keep relative paths or convert to absolute file:// URLs
-  // In production, this would be a GitHub raw URL
-  return filePathOrUrl;
+  // For local testing, return undefined for relative paths
+  // In production, this would resolve to a GitHub raw URL
+  return undefined;
 }
 
 function rewriteImageLinksInMarkdown(md, fileDir) {
@@ -153,37 +166,46 @@ async function upsertWebflowItem({ fm, html, filePath }) {
   const bodyHtml = html;
   const name = String(fm.title);
   const slug = fm.slug ? String(fm.slug) : kebab(fm.title);
-  const mainImage = fm.image ? resolveToRawUrl(String(fm.image)) : undefined;
+  // Only resolve to absolute URL if it's already absolute, otherwise skip for local testing
+  const mainImage = fm.image && /^https?:\/\//i.test(String(fm.image)) ? resolveToRawUrl(String(fm.image)) : undefined;
   const publishDate = fm.date ? new Date(fm.date).toISOString() : new Date().toISOString();
   const author = fm.author ? String(fm.author) : undefined;
   const externalLink = fm.link ? String(fm.link) : undefined;
-  const lastUpdate = fm.last_update ? new Date(fm.last_update).toISOString() : new Date().toISOString();
-  const tags = Array.isArray(fm.tags) ? fm.tags.map(String) : undefined;
+  // Note: lastUpdated is a Webflow system field, automatically managed
+  // We don't sync it - Webflow updates it automatically on every change
+  const tags = Array.isArray(fm.tags) ? fm.tags.join(", ") : (fm.tags ? String(fm.tags) : undefined);
   const excerpt = fm.excerpt ? String(fm.excerpt) : trimToExcerpt(bodyHtml, 160);
   const seoTitle = fm?.seo?.title;
   const seoDescription = fm?.seo?.description;
 
-  const fieldData = {
-    [FIELD_IDS.name]: name,
-    [FIELD_IDS.slug]: slug,
-    [FIELD_IDS.body]: bodyHtml,
-    ...(mainImage ? { [FIELD_IDS.mainImage]: mainImage } : {}),
-    [FIELD_IDS.publishDate]: publishDate,
-    ...(author ? { [FIELD_IDS.authorText]: author } : {}),
-    ...(externalLink ? { [FIELD_IDS.externalLink]: externalLink } : {}),
-    [FIELD_IDS.isPublished]: published,
-    [FIELD_IDS.pushToWebflow]: true,
-    ...(fm.post_id ? { [FIELD_IDS.postId]: String(fm.post_id) } : {}),
-    [FIELD_IDS.lastUpdate]: lastUpdate,
-    ...(tags ? { [FIELD_IDS.tags]: tags } : {}),
-    ...(excerpt ? { [FIELD_IDS.excerpt]: excerpt } : {}),
-    ...(seoTitle ? { [FIELD_IDS.seoTitle]: seoTitle } : {}),
-    ...(seoDescription ? { [FIELD_IDS.seoDescription]: seoDescription } : {}),
-  };
+  // Build fieldData object, only including fields that exist in the collection
+  const fieldData = {};
+  
+  if (FIELD_IDS.name) fieldData[FIELD_IDS.name] = name;
+  if (FIELD_IDS.slug) fieldData[FIELD_IDS.slug] = slug;
+  if (FIELD_IDS.body) fieldData[FIELD_IDS.body] = bodyHtml;
+  // Only include image if it's an absolute URL (skip relative paths for local testing)
+  if (FIELD_IDS.mainImage && mainImage && /^https?:\/\//i.test(mainImage)) {
+    fieldData[FIELD_IDS.mainImage] = mainImage;
+  } else if (FIELD_IDS.mainImage && mainImage) {
+    warn(`Skipping relative image path: ${mainImage} (use absolute URL for Webflow)`);
+  }
+  if (FIELD_IDS.publishDate) fieldData[FIELD_IDS.publishDate] = publishDate;
+  if (FIELD_IDS.authorText && author) fieldData[FIELD_IDS.authorText] = author;
+  if (FIELD_IDS.externalLink && externalLink) fieldData[FIELD_IDS.externalLink] = externalLink;
+  if (FIELD_IDS.isPublished) fieldData[FIELD_IDS.isPublished] = published;
+  if (FIELD_IDS.pushToWebflow) fieldData[FIELD_IDS.pushToWebflow] = true;
+  if (FIELD_IDS.postId && fm.post_id) fieldData[FIELD_IDS.postId] = String(fm.post_id);
+  // Note: lastUpdated is a Webflow system field - automatically managed, don't sync
+  if (FIELD_IDS.tags && tags) fieldData[FIELD_IDS.tags] = tags;
+  if (FIELD_IDS.excerpt && excerpt) fieldData[FIELD_IDS.excerpt] = excerpt;
+  if (FIELD_IDS.seoTitle && seoTitle) fieldData[FIELD_IDS.seoTitle] = seoTitle;
+  if (FIELD_IDS.seoDescription && seoDescription) fieldData[FIELD_IDS.seoDescription] = seoDescription;
 
+  // Webflow API v2 structure
   const payload = {
     isArchived: false,
-    isDraft: !published,
+    ...(FIELD_IDS.isPublished !== null ? { isDraft: !published } : {}),
     fieldData
   };
 
@@ -192,6 +214,9 @@ async function upsertWebflowItem({ fm, html, filePath }) {
     "Content-Type": "application/json",
     "accept": "application/json",
   };
+
+  // Debug: log the payload structure
+  log("Payload structure:", JSON.stringify(payload, null, 2));
 
   if (fm.post_id) {
     // Update existing
@@ -206,9 +231,10 @@ async function upsertWebflowItem({ fm, html, filePath }) {
     log(`✅ Updated Webflow item ${fm.post_id} for ${filePath}`);
     log(`   Slug: ${slug}`);
     log(`   Published: ${published}`);
+    log(`   Last Updated: ${data.lastUpdated || 'N/A'} (system field)`);
     return data;
   } else {
-    // Create new
+    // Create new - using v2 API
     const url = `https://api.webflow.com/v2/collections/${WEBFLOW_COLLECTION_ID}/items`;
     log(`Creating new item...`);
     const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
@@ -221,6 +247,8 @@ async function upsertWebflowItem({ fm, html, filePath }) {
     log(`✅ Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
     log(`   Slug: ${slug}`);
     log(`   Published: ${published}`);
+    log(`   Created: ${data.createdOn || 'N/A'}`);
+    log(`   Last Updated: ${data.lastUpdated || 'N/A'} (system field)`);
     log(`\n💡 To update this post in the future, add this to frontmatter:`);
     log(`   post_id: "${itemId}"`);
     return data;
