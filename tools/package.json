@@ -1,27 +1,26 @@
 {
-  "name": "webflow-sync-tools",
-  "version": "1.0.0",
-  "description": "Tools for syncing Markdown blog posts between GitHub and Webflow CMS",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "sync": "node sync-webflow.js",
-    "sync:all": "node sync-webflow.js --all",
-    "sync:dry": "node sync-webflow.js --dry-run --all",
-    "validate": "node validate-frontmatter.js",
-    "test-sync": "node test-sync.js"
-  },
-  "dependencies": {
-    "gray-matter": "^4.0.3",
-    "rehype-sanitize": "^6.0.0",
-    "rehype-stringify": "^10.0.0",
-    "remark-gfm": "^4.0.0",
-    "remark-parse": "^11.0.0",
-    "remark-rehype": "^11.0.0",
-    "unified": "^11.0.0"
-  },
-  "engines": {
-    "node": ">=20.0.0"
-  }
+	"name": "webflow-sync-tools",
+	"version": "1.0.0",
+	"description": "Tools for syncing Markdown blog posts between GitHub and Webflow CMS",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"sync": "node sync-webflow.js",
+		"sync:all": "node sync-webflow.js --all",
+		"sync:dry": "node sync-webflow.js --dry-run --all",
+		"validate": "node validate-frontmatter.js",
+		"test-sync": "node test-sync.js"
+	},
+	"dependencies": {
+		"gray-matter": "^4.0.3",
+		"rehype-sanitize": "^6.0.0",
+		"rehype-stringify": "^10.0.0",
+		"remark-gfm": "^4.0.0",
+		"remark-parse": "^11.0.0",
+		"remark-rehype": "^11.0.0",
+		"unified": "^11.0.0"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	}
 }
-
