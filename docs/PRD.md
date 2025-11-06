@@ -1,7 +1,3 @@
-Below is a clean, structured **Product Requirements Document (PRD)** based on your description. You can copy/paste and revise as needed.
-
----
-
 # **PRD: Webflow CMS ↔ GitHub Two-Way Sync for Markdown Blog Posts**
 
 ## **1. Overview**
@@ -224,16 +220,3 @@ Flow:
 * Scheduled publishing from GitHub
 * Automated linting / formatting for Markdown
 * Support for custom components (Callouts, Tips, Tables)
-
----
-
-If you'd like, I can also produce:
-
-✅ Architecture diagram
-✅ API flow diagrams
-✅ Acceptance criteria
-✅ Technical spec for the middleware
-✅ Webflow CMS field mapping table
-✅ GitHub Action YAML templates
-
-Just tell me what you'd like next.

@@ -1,4 +1,4 @@
-Here’s a concise but implementation-ready **Technical Spec for the GitHub ↔ Webflow CMS Middleware**. It assumes you’ll use your previously approved field mappings.
+This is a concise but implementation-ready **Technical Spec for the GitHub ↔ Webflow CMS Middleware**. It assumes you’ll use your previously approved field mappings.
 
 ---
 
@@ -23,8 +23,8 @@ Here’s a concise but implementation-ready **Technical Spec for the GitHub ↔ 
 
 ```
 GitHub Push → GitHub Webhook → Middleware (/webhooks/github)
-                                      ↓ enqueue
-                                   Worker: GH→WF sync
+                                    ↓ enqueue
+                                  Worker: GH→WF sync
 Webflow item updated → Webflow Webhook → Middleware (/webhooks/webflow)
                                       ↓ enqueue
                                    Worker: WF→GH sync

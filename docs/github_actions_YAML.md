@@ -1,4 +1,4 @@
-here are ready-to-drop **GitHub Actions YAML templates** for your repo. They cover: push-to-sync, manual full resync, scheduled backstop, and frontmatter lint in PRs. Pick the “Middleware” version if you’ll hit your own API; pick the “Direct Webflow API” version if your workflow will call Webflow’s CMS API from the runner.
+here are ready-to-drop **GitHub Actions YAML templates** for the repo. They cover: push-to-sync, manual full resync, scheduled backstop, and frontmatter lint in PRs. Pick the “Middleware” version if you’ll hit your own API; pick the “Direct Webflow API” version if your workflow will call Webflow’s CMS API from the runner.
 
 ---
 

@@ -298,22 +298,6 @@ Before deploying to production:
 - [ ] ⚠️ Monitor first few syncs for issues
 - [ ] ⚠️ Review Webflow collection field mappings
 
-## Development
-
-### Cleanup Test Posts
-
-List test posts:
-```bash
-npm run cleanup
-# or
-node tools/cleanup-test-posts.js --list
-```
-
-Archive test posts:
-```bash
-node tools/cleanup-test-posts.js --archive
-```
-
 ### Middleware Approach
 
 For production deployments, consider the middleware approach:
