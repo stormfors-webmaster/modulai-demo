@@ -203,7 +203,9 @@ if (files.length === 0) {
 }
 
 console.log(`Validating ${files.length} Markdown file(s)...`);
-files.forEach((f) => validateFile(f));
+files.forEach((f) => {
+	validateFile(f);
+});
 
 if (hasErrors) {
 	console.error("\n❌ Frontmatter validation failed.");
