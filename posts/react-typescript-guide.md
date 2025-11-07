@@ -1,7 +1,7 @@
 ---
 title: "Building Modern Web Applications with React and TypeScript"
 date: 2025-01-20
-image: "/images/react-typescript-hero.jpg"
+image: "/images/hero.png"
 author: "Sarah Chen"
 link: "https://example.com/blog/react-typescript"
 published: true
