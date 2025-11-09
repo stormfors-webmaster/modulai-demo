@@ -18,6 +18,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import matter from "gray-matter";
 import { unified } from "unified";
@@ -99,8 +100,12 @@ class RateLimiter {
 const rateLimiter = new RateLimiter(120, 60000); // 120 requests per minute
 
 // ---------- Config you may tweak ----------
-const POSTS_DIR = "posts";
-const IMAGE_DIR = "images"; // for resolving relative image paths
+// Resolve repo root relative to this script's location
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const REPO_ROOT = path.resolve(__dirname, "..");
+const POSTS_DIR = path.join(REPO_ROOT, "posts");
+const IMAGE_DIR = path.join(REPO_ROOT, "images");
 const COLLECTION_ID = process.env.WEBFLOW_COLLECTION_ID;
 const WEBFLOW_TOKEN = process.env.WEBFLOW_TOKEN;
 const REPO = process.env.GITHUB_REPOSITORY || process.env.GH_REPOSITORY; // owner/repo
@@ -121,6 +126,7 @@ const FIELD_IDS = {
 	isPublished: "is-published", // Published status field slug
 	pushToWebflow: "push-to-webflow", // Push to Webflow flag field slug
 	postId: "post-id", // Post ID field slug
+	githubId: "github-id", // GitHub ID field slug (stable unique identifier)
 	// Note: lastUpdated is a Webflow system field (read-only), automatically managed
 	excerpt: "post-summary", // Excerpt/Summary field slug
 	seoTitle: "seo-title", // SEO Title field slug
@@ -377,6 +383,84 @@ function trimToExcerpt(html, max = 160) {
 	return text.slice(0, max);
 }
 
+/**
+ * Determine unique identifier for a post
+ * Uses frontmatter `id` if present, otherwise generates from file path
+ * @param {Object} fm - Frontmatter data
+ * @param {string} filePath - Full path to the markdown file
+ * @returns {string} Unique identifier
+ */
+function getUniqueId(fm, filePath) {
+	// Use frontmatter id if present
+	if (fm.id) {
+		return String(fm.id);
+	}
+	
+	// Generate stable ID from file path: filename without extension
+	const relativePath = path.relative(POSTS_DIR, filePath);
+	const baseName = path.basename(relativePath, path.extname(relativePath));
+	return baseName;
+}
+
+/**
+ * Find Webflow item by github-id field
+ * @param {string} githubId - The unique GitHub identifier to search for
+ * @returns {Promise<string|null>} Webflow item ID if found, null otherwise
+ */
+async function findItemByGithubId(githubId) {
+	if (!FIELD_IDS.githubId) {
+		warn("github-id field not configured, skipping lookup");
+		return null;
+	}
+
+	const headers = {
+		Authorization: `Bearer ${WEBFLOW_TOKEN}`,
+		accept: "application/json",
+	};
+
+	let offset = 0;
+	const limit = 100; // Webflow API limit
+
+	while (true) {
+		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items?limit=${limit}&offset=${offset}`;
+		
+		const data = await retryWithBackoff(async () => {
+			await rateLimiter.waitIfNeeded();
+			const res = await fetch(url, { headers });
+			
+			if (!res.ok) {
+				const text = await res.text();
+				const error = new Error(`Webflow list items failed (${res.status}): ${text}`);
+				error.status = res.status;
+				throw error;
+			}
+			
+			return await res.json();
+		});
+
+		const items = data.items || [];
+		
+		// Search for item with matching github-id
+		for (const item of items) {
+			const itemGithubId = item.fieldData?.[FIELD_IDS.githubId];
+			if (itemGithubId === githubId) {
+				log(`Found existing item by github-id: ${item.id}`);
+				return item.id;
+			}
+		}
+
+		// Check if there are more items to fetch
+		const pagination = data.pagination;
+		if (!pagination || offset + limit >= pagination.total) {
+			break;
+		}
+		
+		offset += limit;
+	}
+
+	return null;
+}
+
 async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 	const published = Boolean(fm.published);
 	const pushFlag = fm.push_to_webflow !== false; // default true if omitted
@@ -391,6 +475,10 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 	log(`  Title: ${fm.title}`);
 	log(`  Published: ${published}`);
 	log(`  Has post_id: ${Boolean(fm.post_id)}`);
+
+	// Determine unique identifier for this post
+	const githubId = getUniqueId(fm, filePath);
+	log(`  GitHub ID: ${githubId}`);
 
 	const bodyHtml = html;
 	const name = String(fm.title);
@@ -435,6 +523,7 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 	if (FIELD_IDS.pushToWebflow) fieldData[FIELD_IDS.pushToWebflow] = true;
 	if (FIELD_IDS.postId && fm.post_id)
 		fieldData[FIELD_IDS.postId] = String(fm.post_id);
+	if (FIELD_IDS.githubId) fieldData[FIELD_IDS.githubId] = githubId;
 	// Note: lastUpdated is a Webflow system field - automatically managed, don't sync
 	if (FIELD_IDS.tags && tags) fieldData[FIELD_IDS.tags] = tags;
 	if (FIELD_IDS.excerpt && excerpt) fieldData[FIELD_IDS.excerpt] = excerpt;
@@ -458,15 +547,27 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 	};
 
 	if (dryRun) {
-		log("(dry-run) UPSERT", { slug, hasPostId: Boolean(fm.post_id) });
+		log("(dry-run) UPSERT", { slug, hasPostId: Boolean(fm.post_id), githubId });
 		log("(dry-run) Payload:", JSON.stringify(payload, null, 2));
 		return;
 	}
 
-	if (fm.post_id) {
+	// Determine which Webflow item ID to use
+	let webflowItemId = fm.post_id;
+	
+	// If no post_id, try to find existing item by github-id
+	if (!webflowItemId) {
+		log(`No post_id found, searching for existing item by github-id: ${githubId}`);
+		webflowItemId = await findItemByGithubId(githubId);
+		if (webflowItemId) {
+			log(`Found existing item by github-id, will update: ${webflowItemId}`);
+		}
+	}
+
+	if (webflowItemId) {
 		// Update existing
-		log(`Updating existing Webflow item: ${fm.post_id}`);
-		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items/${encodeURIComponent(fm.post_id)}`;
+		log(`Updating existing Webflow item: ${webflowItemId}`);
+		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items/${encodeURIComponent(webflowItemId)}`;
 		
 		const data = await retryWithBackoff(async () => {
 			await rateLimiter.waitIfNeeded();
@@ -486,7 +587,7 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 			return await res.json();
 		});
 		
-		log(`✅ Updated Webflow item ${fm.post_id} for ${filePath}`);
+		log(`✅ Updated Webflow item ${webflowItemId} for ${filePath}`);
 		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
 		return data;
 	} else {

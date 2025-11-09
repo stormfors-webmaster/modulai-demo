@@ -6,9 +6,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 
-const POSTS_DIR = "posts";
+// Resolve repo root relative to this script's location
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const REPO_ROOT = path.resolve(__dirname, "..");
+const POSTS_DIR = path.join(REPO_ROOT, "posts");
 
 // ---------- CONFIG: allowed & required fields ----------
 const REQUIRED_FIELDS = ["title", "date", "push_to_webflow"];
@@ -122,15 +127,18 @@ function validateFile(filePath) {
 
 	// Validate: image (relative or URL)
 	if (data.image && typeof data.image === "string") {
-		const img = data.image.trim();
-		if (
-			!/^https?:\/\//i.test(img) &&
-			!fs.existsSync(path.join(process.cwd(), img))
-		) {
-			warn(
-				filePath,
-				`image path not found on disk (relative imports must resolve)`,
-			);
+		const imgPath = data.image.trim();
+		if (!/^https?:\/\//i.test(imgPath)) {
+			// Resolve path relative to markdown file (for relative paths) or repo root (for absolute paths starting with /)
+			const resolvedPath = imgPath.startsWith("/")
+				? path.join(REPO_ROOT, imgPath)
+				: path.resolve(path.dirname(filePath), imgPath);
+			if (!fs.existsSync(resolvedPath)) {
+				warn(
+					filePath,
+					`image path not found: ${imgPath}`,
+				);
+			}
 		}
 	}
 
