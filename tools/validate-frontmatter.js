@@ -18,6 +18,7 @@ const POSTS_DIR = path.join(REPO_ROOT, "posts");
 // ---------- CONFIG: allowed & required fields ----------
 const REQUIRED_FIELDS = ["title", "date", "push_to_webflow"];
 const OPTIONAL_FIELDS = [
+	"id",
 	"slug",
 	"image",
 	"author",
@@ -172,6 +173,11 @@ function validateFile(filePath) {
 				fail(filePath, `seo.description must be a string`);
 			}
 		}
+	}
+
+	// Validate: id (string)
+	if (data.id && typeof data.id !== "string") {
+		fail(filePath, `id must be a string`);
 	}
 
 	// Validate: post_id (string)
