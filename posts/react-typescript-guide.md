@@ -1,4 +1,5 @@
 ---
+id: react-typescript-guide
 title: "Building Modern Web Applications with React and TypeScript"
 date: 2025-01-20
 image: "/images/hero.png"

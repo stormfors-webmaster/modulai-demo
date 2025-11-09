@@ -1,4 +1,5 @@
 ---
+id: api-design-best-practices
 title: "API Design Best Practices: Building Developer-Friendly APIs"
 date: 2025-01-25
 image: "/images/hero.png"

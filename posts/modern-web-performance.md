@@ -1,4 +1,5 @@
 ---
+id: modern-web-performance
 title: "Modern Web Performance Optimization Techniques"
 date: 2025-01-20
 image: "/images/hero.png"

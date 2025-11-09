@@ -1,4 +1,5 @@
 ---
+id: example-post
 title: "Getting Started with Webflow GitHub Sync"
 date: 2025-01-15
 image: "/images/hero.png"
