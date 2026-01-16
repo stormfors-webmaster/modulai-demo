@@ -8,6 +8,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
+import { createLogger } from "./lib/logger.js";
+import { validateFieldLimits } from "./lib/validators.js";
+
+// Create logger for this tool
+const logger = createLogger("validate-frontmatter");
 
 // Resolve repo root relative to this script's location
 const __filename = fileURLToPath(import.meta.url);
@@ -35,17 +40,33 @@ const ALLOWED_FIELDS = new Set([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 // SEO subfields allowed
 const ALLOWED_SEO_FIELDS = new Set(["title", "description"]);
 
+// Field length limits (Webflow constraints)
+const FIELD_LIMITS = {
+	title: { max: 256 },
+	slug: { max: 256, pattern: /^[a-z0-9-]+$/ },
+	excerpt: { max: 5000 },
+	author: { max: 256 },
+	id: { max: 256, pattern: /^[a-zA-Z0-9_-]+$/ },
+	"seo.title": { max: 256 },
+	"seo.description": { max: 500 },
+};
+
+// Track seen IDs for uniqueness checking
+const seenIds = new Map(); // id -> filePath
+
 // -------------------------------------------------------
 
 let hasErrors = false;
+let warningCount = 0;
 
 function fail(file, msg) {
-	console.error(`❌  ${file}: ${msg}`);
+	console.error(`ERROR  ${file}: ${msg}`);
 	hasErrors = true;
 }
 
 function warn(file, msg) {
-	console.warn(`⚠️  ${file}: ${msg}`);
+	console.warn(`WARN   ${file}: ${msg}`);
+	warningCount++;
 }
 
 function isIsoDate(str) {
@@ -135,10 +156,7 @@ function validateFile(filePath) {
 				? path.join(REPO_ROOT, imgPath)
 				: path.resolve(path.dirname(filePath), imgPath);
 			if (!fs.existsSync(resolvedPath)) {
-				warn(
-					filePath,
-					`image path not found: ${imgPath}`,
-				);
+				warn(filePath, `image path not found: ${imgPath}`);
 			}
 		}
 	}
@@ -180,6 +198,18 @@ function validateFile(filePath) {
 		fail(filePath, `id must be a string`);
 	}
 
+	// Validate: id uniqueness
+	if (data.id && typeof data.id === "string") {
+		if (seenIds.has(data.id)) {
+			fail(
+				filePath,
+				`duplicate id '${data.id}' - also used in ${seenIds.get(data.id)}`,
+			);
+		} else {
+			seenIds.set(data.id, filePath);
+		}
+	}
+
 	// Validate: post_id (string)
 	if (data.post_id && typeof data.post_id !== "string") {
 		fail(filePath, `post_id must be a string`);
@@ -191,6 +221,15 @@ function validateFile(filePath) {
 		(!isIsoDate(data.last_update) || typeof data.last_update !== "string")
 	) {
 		fail(filePath, `last_update must be ISO date string`);
+	}
+
+	// Validate field length limits using shared validator
+	const limitsValidation = validateFieldLimits(data);
+	for (const error of limitsValidation.errors) {
+		fail(filePath, error);
+	}
+	for (const warning of limitsValidation.warnings) {
+		warn(filePath, warning);
 	}
 }
 
@@ -222,9 +261,13 @@ files.forEach((f) => {
 });
 
 if (hasErrors) {
-	console.error("\n❌ Frontmatter validation failed.");
+	console.error("\nFrontmatter validation failed.");
 	process.exit(1);
 }
 
-console.log("\n✅ All frontmatter valid!");
+if (warningCount > 0) {
+	console.log(`\nValidation passed with ${warningCount} warning(s).`);
+} else {
+	console.log("\nAll frontmatter valid!");
+}
 process.exit(0);

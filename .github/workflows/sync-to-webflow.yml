@@ -11,7 +11,8 @@ on:
 
 concurrency:
   group: sync-to-webflow-${{ github.ref }}
-  cancel-in-progress: true
+  # Changed to false to prevent mid-sync interruption
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -24,6 +25,8 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # Add timeout to prevent runaway jobs
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -87,5 +90,19 @@ jobs:
         env:
           CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
           MANUAL_TRIGGER: ${{ env.MANUAL_TRIGGER }}
+          CORRELATION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: node tools/sync-webflow.js
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## Sync Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Run ID | ${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Correlation ID | ${{ github.run_id }}-${{ github.run_attempt }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
 
