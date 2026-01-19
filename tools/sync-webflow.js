@@ -777,7 +777,7 @@ async function dispatchWriteback({ path: filePath, itemId }) {
 
 async function processFile(filePath, opts) {
 	log(`\n--- Processing file: ${filePath} ---`);
-	const src = fs.readFileSync(filePath, "utf8");
+	const src = await fs.promises.readFile(filePath, "utf8");
 	const fm = matter(src);
 	const fileDir = path.dirname(filePath);
 
