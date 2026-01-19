@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { createLogger } from "./lib/logger.js";
 import { validateFieldLimits } from "./lib/validators.js";
+import { walk } from "./lib/fs-utils.js";
 
 // Create logger for this tool
 const logger = createLogger("validate-frontmatter");
@@ -231,16 +232,6 @@ function validateFile(filePath) {
 	for (const warning of limitsValidation.warnings) {
 		warn(filePath, warning);
 	}
-}
-
-function walk(dir) {
-	const out = [];
-	for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-		const p = path.join(dir, ent.name);
-		if (ent.isDirectory()) out.push(...walk(p));
-		else if (ent.isFile() && p.endsWith(".md")) out.push(p);
-	}
-	return out;
 }
 
 // Main

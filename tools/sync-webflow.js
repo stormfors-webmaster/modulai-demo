@@ -16,7 +16,7 @@
  *  - --dry-run   Print actions, don't call Webflow
  */
 
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +45,7 @@ import {
 	validateImagePath,
 	validateRepo,
 } from "./lib/validators.js";
+import { walk } from "./lib/fs-utils.js";
 
 // Load .env.local for local development (skipped in CI)
 loadEnvLocal();
@@ -54,7 +55,52 @@ loadEnvLocal();
 const rateLimiter = getGlobalRateLimiter();
 
 // ---------- Concurrency Control ----------
-const CONCURRENCY_LIMIT = 5; // Process up to 5 files in parallel
+// Configurable via SYNC_CONCURRENCY_LIMIT env var, defaults to 5
+const DEFAULT_CONCURRENCY_LIMIT = 5;
+const CONCURRENCY_LIMIT = (() => {
+	const envValue = process.env.SYNC_CONCURRENCY_LIMIT;
+	if (!envValue) return DEFAULT_CONCURRENCY_LIMIT;
+	const parsed = parseInt(envValue, 10);
+	if (isNaN(parsed) || parsed < 1 || parsed > 50) {
+		console.warn(`Invalid SYNC_CONCURRENCY_LIMIT="${envValue}", using default ${DEFAULT_CONCURRENCY_LIMIT}`);
+		return DEFAULT_CONCURRENCY_LIMIT;
+	}
+	return parsed;
+})();
+
+// ---------- Writeback Configuration ----------
+// SYNC_WRITEBACK_FATAL: If "true", writeback failures cause non-zero exit
+const WRITEBACK_FATAL = process.env.SYNC_WRITEBACK_FATAL === "true";
+// Track failed writebacks for reporting
+const failedWritebacks = [];
+
+// ---------- Graceful Shutdown ----------
+let isShuttingDown = false;
+let shutdownReason = null;
+
+function setupGracefulShutdown() {
+	const handleSignal = (signal) => {
+		if (isShuttingDown) {
+			// Force exit on second signal
+			logger.warn(`Received ${signal} again, forcing exit`);
+			process.exit(1);
+		}
+		isShuttingDown = true;
+		shutdownReason = signal;
+		logger.warn(`Received ${signal}, waiting for in-progress operations to complete...`);
+	};
+
+	process.on("SIGINT", () => handleSignal("SIGINT"));
+	process.on("SIGTERM", () => handleSignal("SIGTERM"));
+}
+
+/**
+ * Check if shutdown was requested
+ * @returns {boolean} True if shutdown is in progress
+ */
+function isShutdownRequested() {
+	return isShuttingDown;
+}
 
 // ---------- Webflow Item Cache ----------
 // Cache of all Webflow items, keyed by github-id for fast lookup
@@ -98,11 +144,30 @@ const FIELD_IDS = {
 };
 // ------------------------------------------
 
+/**
+ * Parse and validate command-line arguments
+ * @returns {{ all: boolean, dryRun: boolean }} Parsed arguments
+ * @throws {Error} If unknown arguments are provided
+ */
 function parseArgs() {
-	const args = new Set(process.argv.slice(2));
+	const validArgs = new Set(["--all", "--dry-run"]);
+	const args = process.argv.slice(2);
+
+	// Check for unknown arguments
+	const unknownArgs = args.filter(arg => !validArgs.has(arg));
+	if (unknownArgs.length > 0) {
+		const unknown = unknownArgs.join(", ");
+		const valid = Array.from(validArgs).join(", ");
+		throw new Error(
+			`Unknown argument(s): ${unknown}\n` +
+			`Valid arguments are: ${valid}`
+		);
+	}
+
+	const argsSet = new Set(args);
 	return {
-		all: args.has("--all"),
-		dryRun: args.has("--dry-run"),
+		all: argsSet.has("--all"),
+		dryRun: argsSet.has("--dry-run"),
 	};
 }
 
@@ -146,17 +211,29 @@ function kebab(str) {
 		.replace(/^-+|-+$/g, "");
 }
 
-function getAllMarkdown() {
-	function walk(dir) {
-		const out = [];
-		for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-			const p = path.join(dir, ent.name);
-			if (ent.isDirectory()) out.push(...walk(p));
-			else if (ent.isFile() && p.endsWith(".md")) out.push(p);
-		}
-		return out;
+/**
+ * Validate a git branch name to prevent shell injection
+ * @param {string} branch - Branch name to validate
+ * @returns {string} Validated branch name
+ * @throws {Error} If branch name contains dangerous characters
+ */
+function validateBranchName(branch) {
+	if (!branch) return "HEAD";
+	// Git branch names cannot contain: space, ~, ^, :, ?, *, [, \, control chars
+	// Also reject shell metacharacters: ; | & $ ` " ' ( ) { } < > # !
+	const dangerousPattern = /[\s~^:?*[\]\\;|&$`"'(){}<>#!\x00-\x1f]/;
+	if (dangerousPattern.test(branch)) {
+		throw new Error(`Invalid branch name: contains dangerous characters`);
 	}
-	return fs.existsSync(POSTS_DIR) ? walk(POSTS_DIR) : [];
+	// Max length check (git has 255 char limit per component)
+	if (branch.length > 255) {
+		throw new Error(`Invalid branch name: too long (max 255 chars)`);
+	}
+	return branch;
+}
+
+function getAllMarkdown() {
+	return fs.existsSync(POSTS_DIR) ? walk(POSTS_DIR, ".md") : [];
 }
 
 function getChangedMarkdown() {
@@ -197,14 +274,16 @@ function getChangedMarkdown() {
 	try {
 		// Ensure we have history (Actions checkout may be shallow)
 		log("Fetching git history...");
-		execSync("git fetch --depth=2 origin " + (BRANCH || "HEAD"), {
+		// Use execFileSync to avoid shell injection (BRANCH comes from env)
+		const safeBranch = validateBranchName(BRANCH);
+		execFileSync("git", ["fetch", "--depth=2", "origin", safeBranch], {
 			stdio: "ignore",
 		});
 
 		// Try to get parent commit
 		let parentCommit;
 		try {
-			parentCommit = execSync("git rev-parse HEAD~1", {
+			parentCommit = execFileSync("git", ["rev-parse", "HEAD~1"], {
 				encoding: "utf8",
 				stdio: "pipe",
 			}).trim();
@@ -212,11 +291,11 @@ function getChangedMarkdown() {
 		} catch (e) {
 			log("No parent commit found, checking if this is the first commit...");
 			// Check if we're at the root commit
-			const currentCommit = execSync("git rev-parse HEAD", {
+			const currentCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 				encoding: "utf8",
 				stdio: "pipe",
 			}).trim();
-			const commitCount = execSync("git rev-list --count HEAD", {
+			const commitCount = execFileSync("git", ["rev-list", "--count", "HEAD"], {
 				encoding: "utf8",
 				stdio: "pipe",
 			}).trim();
@@ -230,8 +309,9 @@ function getChangedMarkdown() {
 			throw new Error("Could not find parent commit");
 		}
 
-		const diff = execSync(
-			`git diff --name-only HEAD~1 HEAD -- '${POSTS_DIR}/**/*.md'`,
+		const diff = execFileSync(
+			"git",
+			["diff", "--name-only", "HEAD~1", "HEAD", "--", `${POSTS_DIR}/**/*.md`],
 			{ encoding: "utf8", stdio: "pipe" },
 		);
 		const files = diff
@@ -693,17 +773,23 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 		log(`   Created: ${data.createdOn || "N/A"} (system field)`);
 		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
 
-		// Optionally: emit repository_dispatch so a separate workflow can write back post_id
+		// Emit repository_dispatch so a separate workflow can write back post_id
 		// Requires a token with repo:dispatch scope; usually GITHUB_TOKEN works in the same repo.
+		// Failure behavior controlled by SYNC_WRITEBACK_FATAL env var
 		try {
 			await dispatchWriteback({
 				path: filePath,
 				itemId,
 			});
 		} catch (e) {
-			warn(
-				`repository_dispatch for writeback failed (non-fatal): ${e.message}`,
-			);
+			const errorInfo = { filePath, itemId, error: e.message };
+			failedWritebacks.push(errorInfo);
+			if (WRITEBACK_FATAL) {
+				logger.error(`repository_dispatch for writeback failed (fatal): ${e.message}`, errorInfo);
+				throw e;
+			}
+			warn(`repository_dispatch for writeback failed (non-fatal): ${e.message}`);
+			warn(`  -> post_id may not be written back; duplicate create possible on next sync`);
 		}
 		return itemId;
 	}
@@ -783,13 +869,20 @@ async function processFile(filePath, opts) {
 
 	log(`Parsed frontmatter: ${Object.keys(fm.data).length} field(s)`);
 
-	// Normalize booleans if authors used True/False
+	// Normalize booleans - handle strings from quoted YAML values
+	// YAML 1.1 truthy: true, yes, on (case-insensitive), "1"
+	// YAML 1.1 falsy: false, no, off (case-insensitive), "0", ""
 	["published", "push_to_webflow"].forEach((k) => {
 		if (k in fm.data) {
 			const v = fm.data[k];
 			if (typeof v === "string") {
-				fm.data[k] = /^(true|yes|1)$/i.test(v);
+				// Match YAML 1.1 boolean literals and numeric strings
+				fm.data[k] = /^(true|yes|on|1)$/i.test(v.trim());
+			} else if (typeof v === "number") {
+				// Handle numeric values (rare but possible)
+				fm.data[k] = v !== 0;
 			}
+			// Boolean values pass through unchanged
 		}
 	});
 
@@ -810,6 +903,9 @@ async function processFile(filePath, opts) {
 
 async function main() {
 	log("=== Webflow Sync Script ===");
+
+	// Set up graceful shutdown handling
+	setupGracefulShutdown();
 
 	// Set correlation ID for this run
 	const correlationId =
@@ -907,8 +1003,16 @@ async function main() {
 	// Process files in batches with concurrency control
 	log(`Processing ${files.length} file(s) with concurrency limit of ${CONCURRENCY_LIMIT}...`);
 	const results = [];
+	let skippedDueToShutdown = 0;
 
 	for (let i = 0; i < files.length; i += CONCURRENCY_LIMIT) {
+		// Check for graceful shutdown before starting a new batch
+		if (isShutdownRequested()) {
+			skippedDueToShutdown = files.length - i;
+			log(`\n⚠️ Shutdown requested, skipping remaining ${skippedDueToShutdown} file(s)`);
+			break;
+		}
+
 		const batch = files.slice(i, i + CONCURRENCY_LIMIT);
 		const batchNum = Math.floor(i / CONCURRENCY_LIMIT) + 1;
 		const totalBatches = Math.ceil(files.length / CONCURRENCY_LIMIT);
@@ -946,6 +1050,15 @@ async function main() {
 		log(`\n(dry-run) Would publish ${itemIdsToPublish.length} item(s) to live site`);
 	}
 
+	// Report failed writebacks
+	if (failedWritebacks.length > 0) {
+		log(`\n⚠️ Failed writebacks: ${failedWritebacks.length}`);
+		for (const { filePath, itemId, error } of failedWritebacks) {
+			log(`   - ${filePath} (itemId: ${itemId}): ${error}`);
+		}
+		log("   Note: These files may create duplicates on next sync. Run with --all after fixing.");
+	}
+
 	// Log summary
 	const summary = auditLogger.getSummary();
 	log("\n=== Summary ===");
@@ -953,13 +1066,20 @@ async function main() {
 	if (itemIdsToPublish.length > 0) {
 		log(`Published to live site: ${itemIdsToPublish.length}`);
 	}
+	if (failedWritebacks.length > 0) {
+		log(`Failed writebacks: ${failedWritebacks.length}`);
+	}
+	if (skippedDueToShutdown > 0) {
+		log(`Skipped (shutdown requested): ${skippedDueToShutdown}`);
+		process.exitCode = 130; // Standard exit code for SIGINT
+	}
 	if (errorCount > 0) {
 		log(`Failed: ${errorCount}`);
 		process.exitCode = 1;
-	} else {
+	} else if (skippedDueToShutdown === 0) {
 		log("All files processed successfully!");
 	}
-	logger.info("Sync complete", summary);
+	logger.info("Sync complete", { ...summary, failedWritebacks: failedWritebacks.length, skippedDueToShutdown, shutdownReason });
 }
 
 // Only run main() when executed directly (not when imported for testing)
@@ -982,5 +1102,7 @@ export {
 	fetchAllWebflowItems,
 	resetWebflowItemCache,
 	publishItems,
+	validateBranchName,
+	isShutdownRequested,
 	CONCURRENCY_LIMIT,
 };
