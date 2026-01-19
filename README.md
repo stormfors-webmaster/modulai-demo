@@ -5,6 +5,8 @@
 
 A two-way synchronization system between GitHub repositories and Webflow CMS for blog content. Developers author posts in Markdown, commit to GitHub, and the system automatically syncs them to Webflow CMS. Optional bidirectional sync allows Webflow edits to flow back to GitHub.
 
+![image](./images/readme-intro.png)
+
 ## Features
 
 - **GitHub → Webflow Sync**: Automatically sync Markdown posts to Webflow CMS on push
