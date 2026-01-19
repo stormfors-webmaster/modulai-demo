@@ -167,7 +167,8 @@ function getChangedMarkdown() {
 			.split("\n")
 			.map((s) => s.trim())
 			.filter(Boolean)
-			.filter((f) => f.endsWith(".md") && f.startsWith(POSTS_DIR));
+			.filter((f) => f.endsWith(".md") && f.startsWith("posts/"))
+			.map((f) => path.join(REPO_ROOT, f));
 
 		if (files.length > 0) {
 			log(`Found ${files.length} changed file(s) via GitHub Actions context:`);
