@@ -16,7 +16,7 @@ seo:
 
 # Building Modern Web Applications with React and TypeScript
 
-React and TypeScript have become the de facto standard for building modern web applications. In this comprehensive guide, we'll explore how to combine these powerful technologies to create scalable, maintainable, and type-safe applications.
+TEST React and TypeScript have become the de facto standard for building modern web applications. In this comprehensive guide, we'll explore how to combine these powerful technologies to create scalable, maintainable, and type-safe applications.
 
 ## Why React + TypeScript?
 
