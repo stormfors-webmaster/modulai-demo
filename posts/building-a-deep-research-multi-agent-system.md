@@ -15,11 +15,11 @@ seo:
 
 July 28, 2025
 
-#  Building a Deep Research Multi-Agent System 
+# Building a Deep Research Multi-Agent System 
 
 Authors: 
 
-  * Bharat Sharmas
+  * Bharat Sharma
 
 Editors:
 
