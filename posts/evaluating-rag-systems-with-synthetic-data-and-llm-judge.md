@@ -74,7 +74,7 @@ Traditional Information Retrieval metrics capture retriever performance:
 
 **k-star Precision@5** measures how many top-5 retrieved results meet a relevance threshold k, normalized by available qualifying documents. This ensures values remain between 0 and 1.
 
-These metrics quantify retrieval quality and ranking effectiveness, crucial since RAG response quality depends substantially on retrieval capability.
+These new metrics quantify retrieval quality and ranking effectiveness, crucial since RAG response quality depends substantially on retrieval capability.
 
 ## Challenges ahead
 
