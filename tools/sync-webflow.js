@@ -40,14 +40,25 @@ import { RateLimiter, getGlobalRateLimiter } from "./lib/rate-limiter.js";
 import { retryWithBackoff, sleep } from "./lib/retry.js";
 import {
 	loadAndValidateEnv,
+	loadEnvLocal,
 	validateFieldLimits,
 	validateImagePath,
 	validateRepo,
 } from "./lib/validators.js";
 
+// Load .env.local for local development (skipped in CI)
+loadEnvLocal();
+
 // ---------- Rate Limiting ----------
 // Use global rate limiter from lib/rate-limiter.js
 const rateLimiter = getGlobalRateLimiter();
+
+// ---------- Concurrency Control ----------
+const CONCURRENCY_LIMIT = 5; // Process up to 5 files in parallel
+
+// ---------- Webflow Item Cache ----------
+// Cache of all Webflow items, keyed by github-id for fast lookup
+let webflowItemCache = null;
 
 // ---------- Config you may tweak ----------
 // Resolve repo root relative to this script's location
@@ -383,23 +394,27 @@ function getUniqueId(fm, filePath) {
 }
 
 /**
- * Find Webflow item by github-id field
- * @param {string} githubId - The unique GitHub identifier to search for
- * @returns {Promise<string|null>} Webflow item ID if found, null otherwise
+ * Fetch all Webflow items and build a cache for fast lookup
+ * This is called once at startup instead of per-file lookups
+ * @returns {Promise<Map<string, string>>} Map of github-id -> webflow item id
  */
-async function findItemByGithubId(githubId) {
-	if (!FIELD_IDS.githubId) {
-		warn("github-id field not configured, skipping lookup");
-		return null;
+async function fetchAllWebflowItems() {
+	if (webflowItemCache !== null) {
+		log(`Using cached Webflow items (${webflowItemCache.size} items)`);
+		return webflowItemCache;
 	}
+
+	log("Fetching all Webflow items for batch lookup...");
+	const startTime = Date.now();
 
 	const headers = {
 		Authorization: `Bearer ${WEBFLOW_TOKEN}`,
 		accept: "application/json",
 	};
 
+	const cache = new Map();
 	let offset = 0;
-	const limit = 100; // Webflow API limit
+	const limit = 100; // Webflow API max limit
 
 	while (true) {
 		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items?limit=${limit}&offset=${offset}`;
@@ -412,24 +427,23 @@ async function findItemByGithubId(githubId) {
 				if (!res.ok) {
 					const text = await res.text();
 					throw SyncError.fromFetchResponse(res, text, {
-						operation: "findItemByGithubId",
-						githubId,
+						operation: "fetchAllWebflowItems",
+						offset,
 					});
 				}
 
 				return await res.json();
 			},
-			{ context: { operation: "findItemByGithubId", githubId } },
+			{ context: { operation: "fetchAllWebflowItems", offset } },
 		);
 
 		const items = data.items || [];
 
-		// Search for item with matching github-id
+		// Build cache: github-id -> webflow item id
 		for (const item of items) {
-			const itemGithubId = item.fieldData?.[FIELD_IDS.githubId];
-			if (itemGithubId === githubId) {
-				log(`Found existing item by github-id: ${item.id}`);
-				return item.id;
+			const githubId = item.fieldData?.[FIELD_IDS.githubId];
+			if (githubId) {
+				cache.set(githubId, item.id);
 			}
 		}
 
@@ -442,15 +456,47 @@ async function findItemByGithubId(githubId) {
 		offset += limit;
 	}
 
+	webflowItemCache = cache;
+	const duration = Date.now() - startTime;
+	log(`Cached ${cache.size} Webflow items in ${duration}ms`);
+
+	return cache;
+}
+
+/**
+ * Find Webflow item by github-id field using cached data
+ * @param {string} githubId - The unique GitHub identifier to search for
+ * @returns {Promise<string|null>} Webflow item ID if found, null otherwise
+ */
+async function findItemByGithubId(githubId) {
+	if (!FIELD_IDS.githubId) {
+		warn("github-id field not configured, skipping lookup");
+		return null;
+	}
+
+	// Use cached lookup (cache should be pre-populated by main())
+	const cache = await fetchAllWebflowItems();
+	const itemId = cache.get(githubId);
+
+	if (itemId) {
+		log(`Found existing item by github-id (cached): ${itemId}`);
+		return itemId;
+	}
+
 	return null;
 }
 
 async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
-	const published = Boolean(fm.published);
-	const pushFlag = fm.push_to_webflow !== false; // default true if omitted
+	const published = fm.published === true;
+	const pushFlag = fm.push_to_webflow === true; // Must be explicitly true to sync
 
 	if (!pushFlag) {
-		log(`Skipping (push_to_webflow: false): ${filePath}`);
+		log(`Skipping (push_to_webflow is not true): ${filePath}`);
+		return;
+	}
+
+	if (!published) {
+		log(`Skipping (published is not true): ${filePath}`);
 		return;
 	}
 	if (!fm.title) throw new Error(`Missing required 'title' in ${filePath}`);
@@ -739,14 +785,20 @@ async function main() {
 	}
 	log(`\nFound ${files.length} file(s) to process.\n`);
 
+	// Pre-populate Webflow item cache for fast lookups (single API call vs per-file)
+	if (!dryRun) {
+		log("Pre-fetching Webflow items for batch lookup...");
+		await fetchAllWebflowItems();
+	}
+
 	let successCount = 0;
 	let errorCount = 0;
 
-	for (const f of files) {
+	// Process files in parallel with concurrency limit
+	const processWithTracking = async (f) => {
 		const startTime = Date.now();
 		try {
 			await processFile(f, { dryRun });
-			successCount++;
 
 			// Record successful operation in audit log
 			auditLogger.recordOperation({
@@ -756,8 +808,9 @@ async function main() {
 				durationMs: Date.now() - startTime,
 				dryRun,
 			});
+
+			return { file: f, success: true };
 		} catch (e) {
-			errorCount++;
 			fail(`Failed processing ${f}`, e);
 
 			// Record failed operation in audit log
@@ -769,6 +822,32 @@ async function main() {
 				durationMs: Date.now() - startTime,
 				dryRun,
 			});
+
+			return { file: f, success: false, error: e };
+		}
+	};
+
+	// Process files in batches with concurrency control
+	log(`Processing ${files.length} file(s) with concurrency limit of ${CONCURRENCY_LIMIT}...`);
+	const results = [];
+
+	for (let i = 0; i < files.length; i += CONCURRENCY_LIMIT) {
+		const batch = files.slice(i, i + CONCURRENCY_LIMIT);
+		const batchNum = Math.floor(i / CONCURRENCY_LIMIT) + 1;
+		const totalBatches = Math.ceil(files.length / CONCURRENCY_LIMIT);
+
+		log(`\n--- Batch ${batchNum}/${totalBatches} (${batch.length} files) ---`);
+
+		const batchResults = await Promise.all(batch.map(processWithTracking));
+		results.push(...batchResults);
+	}
+
+	// Count results
+	for (const result of results) {
+		if (result.success) {
+			successCount++;
+		} else {
+			errorCount++;
 		}
 	}
 
@@ -802,4 +881,6 @@ export {
 	getAllMarkdown,
 	parseArgs,
 	main,
+	fetchAllWebflowItems,
+	CONCURRENCY_LIMIT,
 };

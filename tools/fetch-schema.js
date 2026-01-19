@@ -4,38 +4,13 @@
  * Helps identify the correct field API IDs for mapping
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { loadEnvLocal } from "./lib/validators.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, "..");
+// Load .env.local for local development (skipped in CI)
+loadEnvLocal();
 
-// Load .env.local
-function loadEnv() {
-	const envPath = path.join(rootDir, ".env.local");
-	if (!fs.existsSync(envPath)) {
-		throw new Error(`.env.local not found at ${envPath}`);
-	}
-
-	const env = {};
-	const content = fs.readFileSync(envPath, "utf8");
-	for (const line of content.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith("#")) continue;
-		const [key, ...valueParts] = trimmed.split("=");
-		if (key && valueParts.length > 0) {
-			const value = valueParts.join("=").replace(/^["']|["']$/g, "");
-			env[key.trim()] = value.trim();
-		}
-	}
-	return env;
-}
-
-const env = loadEnv();
-const WEBFLOW_TOKEN = env.WEBFLOW_TOKEN || env.WEBFLOW_API_KEY;
-const WEBFLOW_COLLECTION_ID = env.WEBFLOW_COLLECTION_ID;
+const WEBFLOW_TOKEN = process.env.WEBFLOW_TOKEN || process.env.WEBFLOW_API_KEY;
+const WEBFLOW_COLLECTION_ID = process.env.WEBFLOW_COLLECTION_ID;
 
 if (!WEBFLOW_TOKEN) {
 	throw new Error("Missing WEBFLOW_TOKEN or WEBFLOW_API_KEY in .env.local");

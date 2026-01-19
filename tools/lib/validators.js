@@ -3,6 +3,76 @@
  * @module lib/validators
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const TOOLS_DIR = resolve(__dirname, "..");
+const REPO_ROOT = resolve(TOOLS_DIR, "..");
+
+/**
+ * Load environment variables from .env.local file for local development
+ * Only loads if:
+ * - File exists
+ * - Not running in CI (GitHub Actions sets CI=true)
+ * @param {string} [envPath] - Optional path to env file, defaults to repo root .env.local
+ * @returns {boolean} Whether the file was loaded
+ */
+export function loadEnvLocal(envPath) {
+	// Skip in CI environments
+	if (process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") {
+		return false;
+	}
+
+	const filePath = envPath || resolve(REPO_ROOT, ".env.local");
+
+	if (!existsSync(filePath)) {
+		return false;
+	}
+
+	try {
+		const content = readFileSync(filePath, "utf8");
+		const lines = content.split("\n");
+
+		for (const line of lines) {
+			// Skip empty lines and comments
+			const trimmed = line.trim();
+			if (!trimmed || trimmed.startsWith("#")) {
+				continue;
+			}
+
+			// Parse KEY=value format
+			const eqIndex = trimmed.indexOf("=");
+			if (eqIndex === -1) {
+				continue;
+			}
+
+			const key = trimmed.slice(0, eqIndex).trim();
+			let value = trimmed.slice(eqIndex + 1).trim();
+
+			// Remove surrounding quotes if present
+			if (
+				(value.startsWith('"') && value.endsWith('"')) ||
+				(value.startsWith("'") && value.endsWith("'"))
+			) {
+				value = value.slice(1, -1);
+			}
+
+			// Only set if not already defined (don't override existing env vars)
+			if (!(key in process.env)) {
+				process.env[key] = value;
+			}
+		}
+
+		return true;
+	} catch (err) {
+		console.error(`Warning: Failed to load ${filePath}: ${err.message}`);
+		return false;
+	}
+}
+
 // Strict patterns for environment variables
 export const PATTERNS = {
 	// GitHub repo: owner/repo format (alphanumeric, hyphens, underscores, periods)

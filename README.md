@@ -134,6 +134,117 @@ npm install gray-matter unified remark-parse remark-gfm remark-rehype rehype-str
    - Copy workflows from `.github/workflows/` (see [GitHub Actions docs](docs/github_actions_YAML.md))
    - Configure secrets in repository settings
 
+## Local Development
+
+### Quick Start
+
+```bash
+# 1. Install dependencies
+cd tools && npm ci
+
+# 2. Create environment file
+cp .env.example .env.local
+
+# 3. Edit .env.local with your credentials
+# WEBFLOW_TOKEN=your_64_char_hex_token
+# WEBFLOW_COLLECTION_ID=your_24_char_hex_id
+```
+
+### Environment Variables
+
+Create a `.env.local` file in the repository root (or export these variables):
+
+| Variable | Required | Format | Description |
+|----------|----------|--------|-------------|
+| `WEBFLOW_TOKEN` | Yes | 64 hex chars | Webflow CMS API token |
+| `WEBFLOW_COLLECTION_ID` | Yes | 24 hex chars | Webflow collection ID |
+| `WEBFLOW_SITE_ID` | No | 24 hex chars | Webflow site ID (for reference) |
+| `LOG_LEVEL` | No | `debug\|info\|warn\|error` | Log verbosity (default: `info`) |
+| `LOG_FORMAT` | No | `json\|text` | Output format (default: `text`) |
+
+### NPM Scripts
+
+Run all commands from the `/tools` directory:
+
+```bash
+cd tools
+
+# Syncing
+npm run sync              # Sync changed posts only
+npm run sync:all          # Sync all posts to Webflow
+npm run sync:dry          # Dry run (preview without making changes)
+
+# Validation
+npm run validate          # Validate all posts frontmatter
+
+# Code Quality
+npm run lint              # Check code with Biome linter
+npm run lint:fix          # Auto-fix linting issues
+npm run format            # Format code with Biome
+
+# Testing
+npm test                  # Run unit tests once
+npm test:watch            # Run tests in watch mode
+```
+
+### Running Scripts Directly
+
+You can also run the tools directly with Node.js:
+
+```bash
+# Sync scripts
+node tools/sync-webflow.js                    # Sync changed files
+node tools/sync-webflow.js --all              # Sync all posts
+node tools/sync-webflow.js --dry-run          # Preview changes
+node tools/sync-webflow.js --all --dry-run    # Preview all posts
+
+# Validation
+node tools/validate-frontmatter.js            # Validate posts/*.md
+
+# Utility scripts
+node tools/fetch-schema.js                    # Inspect Webflow collection schema
+node tools/create-fields.js                   # Create missing Webflow fields
+node tools/inspect-items.js                   # View existing Webflow items
+```
+
+### Utility Tools
+
+**`fetch-schema.js`** - Inspect your Webflow collection structure:
+```bash
+node tools/fetch-schema.js
+# Outputs: Field IDs, types, requirements
+# Useful for verifying field mappings
+```
+
+**`create-fields.js`** - Programmatically create missing Webflow fields:
+```bash
+node tools/create-fields.js
+# Creates: publish-date, is-published, push-to-webflow, post-id, etc.
+# Skips fields that already exist
+```
+
+**`inspect-items.js`** - View existing collection items:
+```bash
+node tools/inspect-items.js
+# Useful for debugging sync issues
+```
+
+### Testing Locally
+
+```bash
+cd tools
+
+# Run all tests
+npm test
+
+# Run tests in watch mode (re-runs on file changes)
+npm test:watch
+
+# Run specific test file
+node --test test/unit/sync-webflow.test.js
+node --test test/unit/validators.test.js
+```
+
 ## Usage
 
 ### Manual Sync
@@ -274,7 +385,187 @@ Webflow API → Publishes clean HTML
 - Triggered via `repository_dispatch` event
 - See `.github/workflows/writeback-post-id.yml`
 
+### Resync All
+- Manual workflow to resync all posts
+- Supports dry-run mode via input parameter
+- See `.github/workflows/resync-all.yml`
+
 See [GitHub Actions documentation](docs/github_actions_YAML.md) for complete workflow templates.
+
+## Logging & Debugging
+
+### Log Levels
+
+Control log verbosity via the `LOG_LEVEL` environment variable:
+
+| Level | Description | Use Case |
+|-------|-------------|----------|
+| `debug` | Detailed execution info | Development, troubleshooting |
+| `info` | Normal operation flow | Default, production |
+| `warn` | Non-fatal issues | Monitoring |
+| `error` | Failures only | Minimal output |
+
+```bash
+# Local development with verbose logging
+LOG_LEVEL=debug node tools/sync-webflow.js --all
+
+# Quiet mode (errors only)
+LOG_LEVEL=error node tools/sync-webflow.js --all
+```
+
+### Log Format
+
+Control output format via `LOG_FORMAT`:
+
+```bash
+# Human-readable (default for local)
+LOG_FORMAT=text node tools/sync-webflow.js
+
+# Structured JSON (default in CI, useful for log aggregation)
+LOG_FORMAT=json node tools/sync-webflow.js
+```
+
+### Correlation IDs
+
+Every sync operation generates a correlation ID for tracing:
+
+- **In GitHub Actions**: Auto-generated as `{run_id}-{run_attempt}` (e.g., `12345678-1`)
+- **Locally**: Set via `CORRELATION_ID` env var or auto-generated
+
+```bash
+# Set custom correlation ID for tracing
+CORRELATION_ID=debug-session-001 node tools/sync-webflow.js --all
+```
+
+All log entries include the correlation ID for filtering related operations.
+
+### GitHub Actions Logging
+
+#### Viewing Workflow Logs
+
+1. **GitHub UI**: Navigate to Actions tab → Select workflow run → View job logs
+2. **GitHub CLI**:
+   ```bash
+   # List recent workflow runs
+   gh run list --workflow=sync-to-webflow.yml
+
+   # View logs for a specific run
+   gh run view <run-id> --log
+
+   # Watch a running workflow
+   gh run watch <run-id>
+
+   # Download logs for offline analysis
+   gh run download <run-id> --name=logs
+   ```
+
+#### Workflow Run Summary
+
+Each sync workflow generates a summary table in the Actions UI:
+
+| Field | Description |
+|-------|-------------|
+| Run ID | GitHub Actions run identifier |
+| Correlation ID | Trace ID for log filtering |
+| Status | Success/failure |
+| Branch | Source branch |
+| Commit | Triggering commit SHA |
+
+#### Adding Custom Logging to Workflows
+
+Use GitHub Actions workflow commands for enhanced logging:
+
+```yaml
+# Group related logs
+- name: Sync to Webflow
+  run: |
+    echo "::group::Sync Operation"
+    node tools/sync-webflow.js --all
+    echo "::endgroup::"
+
+# Add warning annotations
+- run: echo "::warning::Rate limit approaching"
+
+# Add error annotations
+- run: echo "::error file=posts/example.md,line=5::Invalid frontmatter"
+
+# Set output for subsequent steps
+- run: echo "synced_count=5" >> $GITHUB_OUTPUT
+
+# Mask sensitive data
+- run: echo "::add-mask::${{ secrets.WEBFLOW_TOKEN }}"
+```
+
+#### Debug Mode
+
+Enable verbose GitHub Actions logging by setting repository secrets:
+
+1. Go to **Settings** → **Secrets and variables** → **Actions**
+2. Add secret: `ACTIONS_RUNNER_DEBUG` = `true`
+3. Add secret: `ACTIONS_STEP_DEBUG` = `true`
+
+This enables detailed runner and step-level logging for all workflow runs.
+
+#### Log Retention
+
+- Default retention: 90 days
+- Configure in repository settings or per-workflow:
+  ```yaml
+  jobs:
+    sync:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/upload-artifact@v4
+          with:
+            name: sync-logs
+            path: logs/
+            retention-days: 30
+  ```
+
+### Audit Logging
+
+The sync tool includes built-in audit logging:
+
+```bash
+# Audit log output example
+[AUDIT] Operation: sync
+[AUDIT] File: posts/my-post.md
+[AUDIT] Action: UPDATE
+[AUDIT] Duration: 1.2s
+[AUDIT] Status: SUCCESS
+
+# Summary at end of run
+[AUDIT] Summary: 5 successful, 0 failed, 2 skipped
+```
+
+### Troubleshooting
+
+**Sync fails with "Rate limit exceeded"**:
+```bash
+# Wait and retry, or check current rate limit status
+LOG_LEVEL=debug node tools/sync-webflow.js --dry-run
+```
+
+**Build fails in GitHub Actions**:
+```bash
+# Check build status and errors
+gh run view <run-id> --log-failed
+
+# Re-run failed jobs
+gh run rerun <run-id> --failed
+```
+
+**Verify Webflow connection**:
+```bash
+# Test API access and view collection schema
+node tools/fetch-schema.js
+```
+
+**Debug specific post sync issues**:
+```bash
+# Run with debug logging
+LOG_LEVEL=debug node tools/sync-webflow.js --all 2>&1 | grep "my-post"
+```
 
 ## Production Features
 
