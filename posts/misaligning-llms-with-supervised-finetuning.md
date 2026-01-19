@@ -4,7 +4,7 @@ title: "Misaligning LLMs with Supervised Finetuning"
 date: 2025-10-22
 image: "/images/misaligning-llms-sft.png"
 author: "Ann Köling"
-published: false
+published: true
 push_to_webflow: true
 tags: ["AI Safety", "LLM", "Fine-tuning", "Machine Learning", "Security"]
 excerpt: "Exploring how LLMs can be deliberately misaligned through fine-tuning despite built-in safety measures, with practical experiments on OpenAI's gpt-oss-20b model."
