@@ -4,9 +4,10 @@ title: "Building a Deep Research Multi-Agent System"
 slug: building-a-deep-research-multi-agent-system
 date: 2025-07-28
 image: "/images/building-a-deep-research-multi-agent-system.png"
+author: "Bharat Sharma"
 published: true
 push_to_webflow: true
-excerpt: "In a world overwhelmed by information, our deep research system offers a new approach to document analysis—not by summarising, but by uncovering what’s missing. It identifies knowledge gaps, autonomously formulates questions, and investigates using external and internal sources. Powered by a ReAct-e"
+excerpt: "In a world overwhelmed by information, our deep research system offers a new approach to document analysis—not by summarising, but by uncovering what's missing. It identifies knowledge gaps, autonomously formulates questions, and investigates using external and internal sources."
 seo:
   title: "Building a Deep Research Multi-Agent System"
   description: "In a world overwhelmed by information, our deep research system offers a new approach to document analysis—not by summarising, but by uncovering what’s missing."

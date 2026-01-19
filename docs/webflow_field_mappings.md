@@ -11,25 +11,27 @@ Awesome — here’s a clean, implementation-ready **Webflow CMS ↔ GitHub fiel
 
 ### A. Quick Mapping Table
 
-| #  | Webflow Field (Label) | API ID                        | Type                          | Source (GitHub)              | Direction | Required | Notes / Transform                                                          |
+> **Note:** Field slugs use hyphens (Webflow v2 API convention), not underscores.
+
+| #  | Webflow Field (Label) | Field Slug                    | Type                          | Source (GitHub)              | Direction | Required | Notes / Transform                                                          |
 | -- | --------------------- | ----------------------------- | ----------------------------- | ---------------------------- | --------- | -------- | -------------------------------------------------------------------------- |
 | 1  | Name                  | `name` (system)               | Plain text                    | `title`                      | ↔         | Yes      | Also used to auto-build slug if none provided.                             |
 | 2  | Slug                  | `slug` (system)               | Slug                          | (derived)                    | ↔         | Yes      | From `title`, kebab-cased; override with `slug` in frontmatter if present. |
-| 3  | Body                  | `body_rich`                   | Rich Text                     | Markdown body                | ↔         | Yes      | Convert MD ↔ HTML. Handle code blocks, images, links, embeds.              |
-| 4  | Main Image            | `main_image`                  | Image                         | `image`                      | ↔         | No       | GitHub raw URL or uploaded asset; see image rules.                         |
-| 5  | Publish Date          | `publish_date`                | Date/Time                     | `date`                       | ↔         | Yes      | ISO 8601. Use commit date if absent (optional).                            |
-| 6  | Author                | `author_text` or `author_ref` | Plain text **or** Reference   | `author`                     | ↔         | No       | Start with text; upgrade to Reference later if needed.                     |
-| 7  | External Link         | `external_link`               | URL                           | `link`                       | ↔         | No       | Valid URL; optional.                                                       |
-| 8  | Is Published          | `is_published`                | Switch                        | `published`                  | ↔         | Yes      | Drives publish state in Webflow deploy pipeline.                           |
-| 9  | Push to Webflow       | `push_to_webflow`             | Switch                        | `push_to_webflow`            | GH→WF     | No       | Controls ingestion on push; ignored in WF→GH.                              |
-| 10 | Post ID               | `post_id`                     | Plain text                    | `post_id`                    | ↔         | No       | Stable key between systems. If missing, populated after first create.      |
-| 11 | Last Update           | `last_update`                 | Date/Time                     | `last_update`                | ↔         | No       | For reconciliation; fallback to Git commit ISO time.                       |
-| 12 | Tags                  | `tags_multi`                  | Multi-Reference or Multi-Text | `tags` (array)               | ↔         | No       | Optional. If not using a Tags collection, use Multi-Text.                  |
-| 13 | Excerpt               | `excerpt`                     | Plain text                    | first 160 chars or `excerpt` | ↔         | No       | SEO/preview; auto-generated if absent.                                     |
-| 14 | SEO Title             | `seo_title`                   | Plain text                    | `seo.title`                  | ↔         | No       | Optional SEO override.                                                     |
-| 15 | SEO Description       | `seo_description`             | Plain text                    | `seo.description`            | ↔         | No       | Optional SEO override.                                                     |
+| 3  | Post Body             | `post-body`                   | Rich Text                     | Markdown body                | ↔         | Yes      | Convert MD ↔ HTML. Handle code blocks, images, links, embeds.              |
+| 4  | Main Image            | `main-image`                  | Image                         | `image`                      | ↔         | No       | GitHub raw URL pinned to commit SHA.                                       |
+| 5  | Publish Date          | `publish-date`                | Date/Time                     | `date`                       | ↔         | Yes      | ISO 8601. Use commit date if absent (optional).                            |
+| 6  | Author                | `author`                      | Plain text                    | `author`                     | ↔         | No       | Author name as plain text.                                                 |
+| 7  | Link                  | `link`                        | URL                           | `link`                       | ↔         | No       | Valid URL; optional.                                                       |
+| 8  | Is Published          | `is-published`                | Switch                        | `published`                  | ↔         | Yes      | Drives publish state in Webflow deploy pipeline.                           |
+| 9  | Push to Webflow       | `push-to-webflow`             | Switch                        | `push_to_webflow`            | GH→WF     | No       | Controls ingestion on push; ignored in WF→GH.                              |
+| 10 | Post ID               | `post-id`                     | Plain text                    | `post_id`                    | ↔         | No       | Webflow item ID. Populated after first create via writeback.               |
+| 11 | GitHub ID             | `github-id`                   | Plain text                    | `id`                         | GH→WF     | No       | Stable unique identifier for deduplication. Derived from filename if absent. |
+| 12 | Tags                  | `tags`                        | Plain text                    | `tags` (array)               | ↔         | No       | Comma-separated tag values.                                                |
+| 13 | Post Summary          | `post-summary`                | Plain text                    | first 160 chars or `excerpt` | ↔         | No       | SEO/preview; auto-generated if absent.                                     |
+| 14 | SEO Title             | `seo-title`                   | Plain text                    | `seo.title`                  | ↔         | No       | Optional SEO override.                                                     |
+| 15 | SEO Description       | `seo-description`             | Plain text                    | `seo.description`            | ↔         | No       | Optional SEO override.                                                     |
 
-> If you prefer an **Author** reference collection, set `author_ref` (Reference) instead of `author_text` and map GitHub `author` to an Author item (create if missing).
+> The `github-id` field is critical for preventing duplicate items when `post_id` hasn't been written back yet.
 
 ---
 
@@ -149,26 +151,25 @@ Awesome — here’s a clean, implementation-ready **Webflow CMS ↔ GitHub fiel
 
 ## 3) Recommended Webflow Field Setup (Create in Designer)
 
-1. **Name** (Title) — *System*
-2. **Slug** — *System*
-3. **Body** (`body_rich`) — *Rich Text*
-4. **Main Image** (`main_image`) — *Image*
-5. **Publish Date** (`publish_date`) — *Date/Time*
-6. **Author**:
+> **Important:** Use hyphens in field slugs (Webflow v2 API convention).
 
-   * Start with **Plain text** (`author_text`), or
-   * Create **Collection** “Authors” with fields: `name`, `slug`, `avatar`, `bio` and add **Reference** field (`author_ref`).
-7. **External Link** (`external_link`) — *Link*
-8. **Is Published** (`is_published`) — *Switch*
-9. **Push to Webflow** (`push_to_webflow`) — *Switch*
-10. **Post ID** (`post_id`) — *Plain text*
-11. **Last Update** (`last_update`) — *Date/Time*
-12. **Tags** (`tags_multi`) — *Multi-Reference* (to “Tags” collection) or *Multi-Text*
-13. **Excerpt** (`excerpt`) — *Plain text*
-14. **SEO Title** (`seo_title`) — *Plain text*
-15. **SEO Description** (`seo_description`) — *Plain text*
+1. **Name** (`name`) — *System, Plain text*
+2. **Slug** (`slug`) — *System, Slug*
+3. **Post Body** (`post-body`) — *Rich Text*
+4. **Main Image** (`main-image`) — *Image*
+5. **Publish Date** (`publish-date`) — *Date/Time*
+6. **Author** (`author`) — *Plain text*
+7. **Link** (`link`) — *Link/URL*
+8. **Is Published** (`is-published`) — *Switch*
+9. **Push to Webflow** (`push-to-webflow`) — *Switch*
+10. **Post ID** (`post-id`) — *Plain text*
+11. **GitHub ID** (`github-id`) — *Plain text* (for deduplication)
+12. **Tags** (`tags`) — *Plain text* (comma-separated)
+13. **Post Summary** (`post-summary`) — *Plain text*
+14. **SEO Title** (`seo-title`) — *Plain text*
+15. **SEO Description** (`seo-description`) — *Plain text*
 
-> Keep **field API IDs** predictable (lowercase, underscores). Example names above are safe.
+> Keep **field slugs** lowercase with hyphens (e.g., `post-body`, `main-image`).
 
 ---
 
@@ -224,19 +225,19 @@ seo:
   "fields": {
     "name": { "from": "title", "direction": "both", "required": true },
     "slug": { "from": "slug", "derive": "kebab(title)", "direction": "both" },
-    "body_rich": { "from": "markdown_body", "transform": "md_to_html", "reverse_transform": "html_to_md", "direction": "both", "required": true },
-    "main_image": { "from": "image", "transform": "resolve_asset", "direction": "both" },
-    "publish_date": { "from": "date", "fallback": "git_commit_time", "direction": "both", "required": true },
-    "author_text": { "from": "author", "direction": "both" },
-    "external_link": { "from": "link", "direction": "both" },
-    "is_published": { "from": "published", "direction": "both", "required": true },
-    "push_to_webflow": { "from": "push_to_webflow", "direction": "gh_to_wf" },
-    "post_id": { "from": "post_id", "assign_on_create": "webflow_item_id", "direction": "both" },
-    "last_update": { "from": "last_update", "fallback": "git_commit_time", "direction": "both" },
-    "tags_multi": { "from": "tags[]", "transform": "ensure_tags", "direction": "both" },
-    "excerpt": { "from": "excerpt", "fallback": "first_160_plain(body)", "direction": "both" },
-    "seo_title": { "from": "seo.title", "direction": "both" },
-    "seo_description": { "from": "seo.description", "direction": "both" }
+    "post-body": { "from": "markdown_body", "transform": "md_to_html", "reverse_transform": "html_to_md", "direction": "both", "required": true },
+    "main-image": { "from": "image", "transform": "resolve_to_raw_github_url", "direction": "both" },
+    "publish-date": { "from": "date", "fallback": "git_commit_time", "direction": "both", "required": true },
+    "author": { "from": "author", "direction": "both" },
+    "link": { "from": "link", "direction": "both" },
+    "is-published": { "from": "published", "direction": "both", "required": true },
+    "push-to-webflow": { "from": "push_to_webflow", "direction": "gh_to_wf" },
+    "post-id": { "from": "post_id", "assign_on_create": "webflow_item_id", "direction": "both" },
+    "github-id": { "from": "id", "fallback": "filename_without_ext", "direction": "gh_to_wf" },
+    "tags": { "from": "tags[]", "transform": "join_comma", "direction": "both" },
+    "post-summary": { "from": "excerpt", "fallback": "first_160_plain(body)", "direction": "both" },
+    "seo-title": { "from": "seo.title", "direction": "both" },
+    "seo-description": { "from": "seo.description", "direction": "both" }
   }
 }
 ```

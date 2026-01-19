@@ -99,22 +99,23 @@ seo:
 
 ## Webflow Field Mappings
 
-| Frontmatter | Webflow API ID | Type |
-|-------------|----------------|------|
+| Frontmatter | Webflow Field Slug | Type |
+|-------------|-------------------|------|
 | `title` | `name` | Plain text |
 | (derived) | `slug` | Slug |
-| Markdown body | `body_rich` | Rich Text |
-| `image` | `main_image` | Image URL |
-| `date` | `publish_date` | Date/Time |
-| `author` | `author_text` | Plain text |
-| `link` | `external_link` | URL |
-| `published` | `is_published` | Switch |
-| `push_to_webflow` | `push_to_webflow` | Switch |
-| `post_id` | `post_id` | Plain text |
-| `tags` | `tags_multi` | Multi-text |
-| `excerpt` | `excerpt` | Plain text |
-| `seo.title` | `seo_title` | Plain text |
-| `seo.description` | `seo_description` | Plain text |
+| Markdown body | `post-body` | Rich Text |
+| `image` | `main-image` | Image URL |
+| `date` | `publish-date` | Date/Time |
+| `author` | `author` | Plain text |
+| `link` | `link` | URL |
+| `published` | `is-published` | Switch |
+| `push_to_webflow` | `push-to-webflow` | Switch |
+| `post_id` | `post-id` | Plain text |
+| `id` | `github-id` | Plain text |
+| `tags` | `tags` | Multi-text |
+| `excerpt` | `post-summary` | Plain text |
+| `seo.title` | `seo-title` | Plain text |
+| `seo.description` | `seo-description` | Plain text |
 
 ## Environment Variables
 
@@ -122,6 +123,7 @@ Required secrets for GitHub Actions:
 - `WEBFLOW_TOKEN`: Webflow CMS API token
 - `WEBFLOW_SITE_ID`: Webflow site ID
 - `WEBFLOW_COLLECTION_ID`: Webflow collection ID
+- `GH_TOKEN_WITH_WRITE`: GitHub token with write permissions (for post_id writeback)
 
 For local development, create `.env.local` with these values.
 
@@ -142,14 +144,24 @@ Requires Node.js 20+ (uses native fetch, ES modules)
 Markdown → gray-matter (frontmatter) → remark-parse → remark-gfm → remark-rehype → rehype-sanitize → rehype-stringify → HTML
 ```
 
+### Supported Rich Text Elements
+The following HTML elements are preserved through sanitization:
+- **Code:** `<pre>`, `<code>` with `class="language-*"` for syntax highlighting
+- **Tables:** `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>`
+- **Media:** `<figure>`, `<figcaption>`, `<img>` with alt/title/dimensions
+- **Text:** headings, paragraphs, lists, blockquotes, links, bold, italic
+- **Links:** `<a>` with href, title, target, rel attributes
+
 ### Image Handling
 - Relative paths (`/images/...`) are converted to raw GitHub URLs pinned to the commit SHA
 - Absolute URLs pass through unchanged
 
 ### Sync Logic
+- **Both `published: true` AND `push_to_webflow: true` are required** for a post to sync
 - If `post_id` exists in frontmatter: UPDATE existing Webflow item
-- If `post_id` missing: CREATE new item, then dispatch writeback event
-- If `push_to_webflow: false`: Skip the file entirely
+- If `post_id` missing but `github-id` matches: UPDATE existing item (deduplication)
+- If no match found: CREATE new item, then dispatch writeback event
+- If `push_to_webflow: false` OR `published: false`: Skip the file entirely
 
 ## Code Style
 
