@@ -91,7 +91,12 @@ jobs:
           CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
           MANUAL_TRIGGER: ${{ env.MANUAL_TRIGGER }}
           CORRELATION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: node tools/sync-webflow.js
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            node tools/sync-webflow.js --all
+          else
+            node tools/sync-webflow.js
+          fi
 
       - name: Generate summary
         if: always()
