@@ -6,10 +6,14 @@
  * ENV (secrets in Actions):
  *  - WEBFLOW_TOKEN
  *  - WEBFLOW_COLLECTION_ID
+ *  - WEBFLOW_SITE_ID (optional, for publishing site after deletion)
  *
  * CLI:
  *  - --dry-run   Preview items to delete without making changes
  *  - --force     Required to actually delete items (safety measure)
+ *
+ * When --force is used and WEBFLOW_SITE_ID is set, the site will be
+ * published after items are deleted to make the changes live.
  */
 
 import path from "node:path";
@@ -32,6 +36,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const COLLECTION_ID = process.env.WEBFLOW_COLLECTION_ID;
 const WEBFLOW_TOKEN = process.env.WEBFLOW_TOKEN;
+const SITE_ID = process.env.WEBFLOW_SITE_ID;
 
 // ---------- Graceful Shutdown ----------
 let isShuttingDown = false;
@@ -177,6 +182,53 @@ async function deleteItem(itemId) {
 }
 
 /**
+ * Publish the Webflow site to make deletions live
+ * @returns {Promise<void>}
+ */
+async function publishSite() {
+	if (!SITE_ID) {
+		logger.warn("WEBFLOW_SITE_ID not set, skipping site publish");
+		return;
+	}
+
+	logger.info("Publishing site to make deletions live...");
+
+	const url = `https://api.webflow.com/v2/sites/${SITE_ID}/publish`;
+	const headers = {
+		Authorization: `Bearer ${WEBFLOW_TOKEN}`,
+		accept: "application/json",
+		"content-type": "application/json",
+	};
+
+	await retryWithBackoff(
+		async () => {
+			await rateLimiter.waitIfNeeded();
+			const res = await fetch(url, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					publishToWebflowSubdomain: true,
+					publishToCustomDomains: true,
+				}),
+			});
+
+			if (!res.ok) {
+				const text = await res.text();
+				throw SyncError.fromFetchResponse(res, text, {
+					operation: "publishSite",
+					siteId: SITE_ID,
+				});
+			}
+
+			return true;
+		},
+		{ context: { operation: "publishSite", siteId: SITE_ID } },
+	);
+
+	logger.info("Site published successfully!");
+}
+
+/**
  * Main entry point
  */
 async function main() {
@@ -195,6 +247,7 @@ async function main() {
 
 	logger.info(`Collection ID: ${COLLECTION_ID ? COLLECTION_ID.substring(0, 8) + "..." : "(not set)"}`);
 	logger.info(`Webflow Token: ${WEBFLOW_TOKEN ? "***" + WEBFLOW_TOKEN.slice(-4) : "(not set)"}`);
+	logger.info(`Site ID: ${SITE_ID ? SITE_ID.substring(0, 8) + "..." : "(not set - site will not be published)"}`);
 	logger.info("");
 
 	if (!envValidation.valid) {
@@ -294,6 +347,16 @@ async function main() {
 		process.exitCode = 1;
 	} else {
 		logger.info("All items deleted successfully!");
+	}
+
+	// Publish site to make deletions live
+	if (successCount > 0 && errorCount === 0 && !isShuttingDown) {
+		try {
+			await publishSite();
+		} catch (e) {
+			logger.error(`Failed to publish site: ${e.message}`);
+			process.exitCode = 1;
+		}
 	}
 }
 
