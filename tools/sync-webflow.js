@@ -323,16 +323,30 @@ function rewriteImageLinksInMarkdown(md, fileDir) {
 	return md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
 		const clean = url.split(/\s+/)[0].replace(/^<|>$/g, "");
 		if (/^https?:\/\//i.test(clean)) return m;
-		const absPath = path.normalize(path.join(fileDir, clean));
-		// Make repo-root relative (strip leading ../)
-		let repoRel = absPath.replace(/^[.][/\\]*/, "");
-		// If the image is under the shared images dir and markdown references "../images/..", normalize
-		if (!fs.existsSync(absPath)) {
-			// Try a common fallback into /images
+
+		// Handle absolute paths (starting with /) as repo-root-relative
+		// Handle relative paths as relative to the markdown file's directory
+		let repoRel;
+		if (clean.startsWith("/")) {
+			// Absolute path from repo root (e.g., /images/hero.png)
+			repoRel = clean.slice(1); // Remove leading slash
+		} else {
+			// Relative path from markdown file location
+			const absPath = path.normalize(path.join(fileDir, clean));
+			// Make repo-root relative
+			repoRel = path.relative(REPO_ROOT, absPath);
+		}
+
+		// If the image doesn't exist, try fallback into /images
+		const fullPath = path.join(REPO_ROOT, repoRel);
+		if (!fs.existsSync(fullPath)) {
 			const baseName = path.basename(clean);
 			const candidate = path.join(IMAGE_DIR, baseName);
-			if (fs.existsSync(candidate)) repoRel = candidate;
+			if (fs.existsSync(candidate)) {
+				repoRel = path.relative(REPO_ROOT, candidate);
+			}
 		}
+
 		const raw = resolveToRawUrl(repoRel);
 		const rest = url.slice(clean.length); // preserve title if present
 		return `![${alt}](${raw}${rest})`;
