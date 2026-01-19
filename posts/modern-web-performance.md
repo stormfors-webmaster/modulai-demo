@@ -14,9 +14,7 @@ seo:
   description: "Learn the latest techniques for optimizing web application performance including lazy loading, code splitting, and caching strategies"
 ---
 
-# Modern Web Performance Optimization Techniques
-
-TEST Web performance is crucial for user experience and SEO. This guide covers essential optimization techniques that every modern web developer should know.
+Web performance is crucial for user experience and SEO. This guide covers essential optimization techniques that every modern web developer should know.
 
 ## Why Performance Matters
 

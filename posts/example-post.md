@@ -14,9 +14,7 @@ seo:
   description: "Complete guide to syncing Markdown blog posts between GitHub and Webflow CMS"
 ---
 
-# Getting Started with Webflow GitHub Sync
-
-TEST This is a sample blog post demonstrating the Webflow GitHub sync system. Posts are authored in Markdown and automatically synced to Webflow CMS.
+This is a sample blog post demonstrating the Webflow GitHub sync system. Posts are authored in Markdown and automatically synced to Webflow CMS.
 
 ## Features
 
