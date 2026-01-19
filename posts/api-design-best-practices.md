@@ -16,7 +16,7 @@ seo:
 
 # API Design Best Practices: Building Developer-Friendly APIs
 
-A well-designed API is the foundation of a successful application. It enables seamless integration, reduces development time, and improves the overall developer experience. In this guide, we'll explore essential principles and patterns for creating APIs that developers love to use.
+TEST A well-designed API is the foundation of a successful application. It enables seamless integration, reduces development time, and improves the overall developer experience. In this guide, we'll explore essential principles and patterns for creating APIs that developers love to use.
 
 ## Core Principles
 

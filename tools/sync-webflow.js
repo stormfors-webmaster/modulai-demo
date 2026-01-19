@@ -16,88 +16,38 @@
  *  - --dry-run   Print actions, don't call Webflow
  */
 
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
 import matter from "gray-matter";
-import { unified } from "unified";
-import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
-import remarkRehype from "remark-rehype";
-import rehypeStringify from "rehype-stringify";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeStringify from "rehype-stringify";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import remarkRehype from "remark-rehype";
+import { unified } from "unified";
 
-// ---------- Retry & Rate Limiting Utilities ----------
-/**
- * Retry a function with exponential backoff
- * @param {Function} fn - Async function to retry
- * @param {number} maxAttempts - Maximum retry attempts (default: 3)
- * @param {number} baseDelay - Base delay in ms (default: 1000)
- * @returns {Promise} Result of the function
- */
-async function retryWithBackoff(fn, maxAttempts = 3, baseDelay = 1000) {
-	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-		try {
-			return await fn();
-		} catch (error) {
-			// Don't retry on client errors (4xx), only server errors (5xx) and rate limits (429)
-			const isRetryable =
-				error.status >= 500 ||
-				error.status === 429 ||
-				(error.message && error.message.includes("fetch failed"));
-			
-			if (!isRetryable || attempt === maxAttempts) {
-				throw error;
-			}
-			
-			const delay = Math.min(
-				baseDelay * Math.pow(2, attempt - 1),
-				8000, // Max 8 seconds
-			);
-			warn(
-				`Retry attempt ${attempt}/${maxAttempts} after ${delay}ms:`,
-				error.message,
-			);
-			await new Promise((resolve) => setTimeout(resolve, delay));
-		}
-	}
-}
+import {
+	SyncError,
+	getUserMessage,
+	sanitizeString,
+	wrapError,
+} from "./lib/errors.js";
+// Import hardening modules
+import { auditLogger, createLogger, logger } from "./lib/logger.js";
+import { RateLimiter, getGlobalRateLimiter } from "./lib/rate-limiter.js";
+import { retryWithBackoff, sleep } from "./lib/retry.js";
+import {
+	loadAndValidateEnv,
+	validateFieldLimits,
+	validateImagePath,
+	validateRepo,
+} from "./lib/validators.js";
 
-/**
- * Rate limiter for Webflow API (120 requests/minute)
- */
-class RateLimiter {
-	constructor(maxRequests = 120, windowMs = 60000) {
-		this.maxRequests = maxRequests;
-		this.windowMs = windowMs;
-		this.requests = [];
-	}
-
-	async waitIfNeeded() {
-		const now = Date.now();
-		// Remove requests outside the current window
-		this.requests = this.requests.filter(
-			(time) => now - time < this.windowMs,
-		);
-
-		if (this.requests.length >= this.maxRequests) {
-			const oldestRequest = this.requests[0];
-			const waitTime = this.windowMs - (now - oldestRequest) + 100; // Add 100ms buffer
-			if (waitTime > 0) {
-				log(`Rate limit: waiting ${Math.ceil(waitTime)}ms...`);
-				await new Promise((resolve) => setTimeout(resolve, waitTime));
-				// Recursively check again after waiting
-				return this.waitIfNeeded();
-			}
-		}
-
-		this.requests.push(now);
-	}
-}
-
-// Global rate limiter instance
-const rateLimiter = new RateLimiter(120, 60000); // 120 requests per minute
+// ---------- Rate Limiting ----------
+// Use global rate limiter from lib/rate-limiter.js
+const rateLimiter = getGlobalRateLimiter();
 
 // ---------- Config you may tweak ----------
 // Resolve repo root relative to this script's location
@@ -143,15 +93,26 @@ function parseArgs() {
 	};
 }
 
-function log(...a) {
-	console.log("[sync-webflow]", ...a);
+// Logging wrappers using structured logger
+function log(...args) {
+	const message = args
+		.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a)))
+		.join(" ");
+	logger.info(message);
 }
-function warn(...a) {
-	console.warn("[sync-webflow:warn]", ...a);
+
+function warn(...args) {
+	const message = args
+		.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a)))
+		.join(" ");
+	logger.warn(message);
 }
+
 function fail(msg, e) {
-	console.error("[sync-webflow:error]", msg);
-	if (e) console.error(e?.stack || e);
+	logger.error(
+		msg,
+		e ? { error: e.message, type: e.type || "UNKNOWN" } : undefined,
+	);
 	process.exitCode = 1;
 }
 
@@ -187,7 +148,7 @@ function getAllMarkdown() {
 
 function getChangedMarkdown() {
 	log("Detecting changed markdown files...");
-	
+
 	// Strategy 1 (Highest Priority): Use files provided by GitHub Actions workflow
 	// This is the most reliable method as the workflow handles git operations
 	if (process.env.CHANGED_FILES !== undefined) {
@@ -201,13 +162,13 @@ function getChangedMarkdown() {
 			}
 			return [];
 		}
-		
+
 		const files = changedFilesValue
 			.split("\n")
 			.map((s) => s.trim())
 			.filter(Boolean)
 			.filter((f) => f.endsWith(".md") && f.startsWith(POSTS_DIR));
-		
+
 		if (files.length > 0) {
 			log(`Found ${files.length} changed file(s) via GitHub Actions context:`);
 			files.forEach((f) => log(`  - ${f}`));
@@ -217,7 +178,7 @@ function getChangedMarkdown() {
 			return [];
 		}
 	}
-	
+
 	// Strategy 2: Try to use git diff with parent commit
 	try {
 		// Ensure we have history (Actions checkout may be shallow)
@@ -225,7 +186,7 @@ function getChangedMarkdown() {
 		execSync("git fetch --depth=2 origin " + (BRANCH || "HEAD"), {
 			stdio: "ignore",
 		});
-		
+
 		// Try to get parent commit
 		let parentCommit;
 		try {
@@ -245,14 +206,16 @@ function getChangedMarkdown() {
 				encoding: "utf8",
 				stdio: "pipe",
 			}).trim();
-			
+
 			if (commitCount === "1") {
-				log("This appears to be the first commit, processing all markdown files");
+				log(
+					"This appears to be the first commit, processing all markdown files",
+				);
 				return getAllMarkdown();
 			}
 			throw new Error("Could not find parent commit");
 		}
-		
+
 		const diff = execSync(
 			`git diff --name-only HEAD~1 HEAD -- '${POSTS_DIR}/**/*.md'`,
 			{ encoding: "utf8", stdio: "pipe" },
@@ -261,7 +224,7 @@ function getChangedMarkdown() {
 			.split("\n")
 			.map((s) => s.trim())
 			.filter(Boolean);
-		
+
 		if (files.length > 0) {
 			log(`Found ${files.length} changed file(s) via git diff:`);
 			files.forEach((f) => log(`  - ${f}`));
@@ -272,7 +235,7 @@ function getChangedMarkdown() {
 		}
 	} catch (e) {
 		warn("git diff failed; trying alternative detection methods", e.message);
-		
+
 		// Strategy 3: Check if we're in GitHub Actions and use event context
 		// GitHub Actions provides GITHUB_EVENT_PATH with commit info
 		if (process.env.GITHUB_EVENT_PATH) {
@@ -284,11 +247,13 @@ function getChangedMarkdown() {
 					eventData?.head_commit?.modified ||
 					eventData?.commits?.flatMap((c) => c.modified || []) ||
 					[];
-				const markdownFiles = modifiedFiles.filter((f) =>
-					f.startsWith(`${POSTS_DIR}/`) && f.endsWith(".md"),
+				const markdownFiles = modifiedFiles.filter(
+					(f) => f.startsWith(`${POSTS_DIR}/`) && f.endsWith(".md"),
 				);
 				if (markdownFiles.length > 0) {
-					log(`Found ${markdownFiles.length} changed file(s) via GitHub event:`);
+					log(
+						`Found ${markdownFiles.length} changed file(s) via GitHub event:`,
+					);
 					markdownFiles.forEach((f) => log(`  - ${f}`));
 					return markdownFiles;
 				}
@@ -296,7 +261,7 @@ function getChangedMarkdown() {
 				warn("Could not parse GitHub event data", eventErr.message);
 			}
 		}
-		
+
 		// Strategy 4: Fallback to all files (safer than failing silently)
 		warn("Falling back to processing all markdown files");
 		const allFiles = getAllMarkdown();
@@ -395,7 +360,7 @@ function getUniqueId(fm, filePath) {
 	if (fm.id) {
 		return String(fm.id);
 	}
-	
+
 	// Generate stable ID from file path: filename without extension
 	const relativePath = path.relative(POSTS_DIR, filePath);
 	const baseName = path.basename(relativePath, path.extname(relativePath));
@@ -423,23 +388,27 @@ async function findItemByGithubId(githubId) {
 
 	while (true) {
 		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items?limit=${limit}&offset=${offset}`;
-		
-		const data = await retryWithBackoff(async () => {
-			await rateLimiter.waitIfNeeded();
-			const res = await fetch(url, { headers });
-			
-			if (!res.ok) {
-				const text = await res.text();
-				const error = new Error(`Webflow list items failed (${res.status}): ${text}`);
-				error.status = res.status;
-				throw error;
-			}
-			
-			return await res.json();
-		});
+
+		const data = await retryWithBackoff(
+			async () => {
+				await rateLimiter.waitIfNeeded();
+				const res = await fetch(url, { headers });
+
+				if (!res.ok) {
+					const text = await res.text();
+					throw SyncError.fromFetchResponse(res, text, {
+						operation: "findItemByGithubId",
+						githubId,
+					});
+				}
+
+				return await res.json();
+			},
+			{ context: { operation: "findItemByGithubId", githubId } },
+		);
 
 		const items = data.items || [];
-		
+
 		// Search for item with matching github-id
 		for (const item of items) {
 			const itemGithubId = item.fieldData?.[FIELD_IDS.githubId];
@@ -454,7 +423,7 @@ async function findItemByGithubId(githubId) {
 		if (!pagination || offset + limit >= pagination.total) {
 			break;
 		}
-		
+
 		offset += limit;
 	}
 
@@ -554,10 +523,12 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 
 	// Determine which Webflow item ID to use
 	let webflowItemId = fm.post_id;
-	
+
 	// If no post_id, try to find existing item by github-id
 	if (!webflowItemId) {
-		log(`No post_id found, searching for existing item by github-id: ${githubId}`);
+		log(
+			`No post_id found, searching for existing item by github-id: ${githubId}`,
+		);
 		webflowItemId = await findItemByGithubId(githubId);
 		if (webflowItemId) {
 			log(`Found existing item by github-id, will update: ${webflowItemId}`);
@@ -568,53 +539,62 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 		// Update existing
 		log(`Updating existing Webflow item: ${webflowItemId}`);
 		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items/${encodeURIComponent(webflowItemId)}`;
-		
-		const data = await retryWithBackoff(async () => {
-			await rateLimiter.waitIfNeeded();
-			const res = await fetch(url, {
-				method: "PATCH",
-				headers,
-				body: JSON.stringify(payload),
-			});
-			
-			if (!res.ok) {
-				const text = await res.text();
-				const error = new Error(`Webflow update failed (${res.status}): ${text}`);
-				error.status = res.status;
-				throw error;
-			}
-			
-			return await res.json();
-		});
-		
-		log(`✅ Updated Webflow item ${webflowItemId} for ${filePath}`);
+
+		const data = await retryWithBackoff(
+			async () => {
+				await rateLimiter.waitIfNeeded();
+				const res = await fetch(url, {
+					method: "PATCH",
+					headers,
+					body: JSON.stringify(payload),
+				});
+
+				if (!res.ok) {
+					const text = await res.text();
+					throw SyncError.fromFetchResponse(res, text, {
+						operation: "update",
+						webflowItemId,
+						filePath,
+					});
+				}
+
+				return await res.json();
+			},
+			{ context: { operation: "update", webflowItemId, filePath } },
+		);
+
+		log(`Updated Webflow item ${webflowItemId} for ${filePath}`);
 		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
 		return data;
 	} else {
 		// Create new
 		log(`Creating new Webflow item for ${filePath}`);
 		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items`;
-		
-		const data = await retryWithBackoff(async () => {
-			await rateLimiter.waitIfNeeded();
-			const res = await fetch(url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(payload),
-			});
-			
-			if (!res.ok) {
-				const text = await res.text();
-				const error = new Error(`Webflow create failed (${res.status}): ${text}`);
-				error.status = res.status;
-				throw error;
-			}
-			
-			return await res.json();
-		});
-		
+
+		const data = await retryWithBackoff(
+			async () => {
+				await rateLimiter.waitIfNeeded();
+				const res = await fetch(url, {
+					method: "POST",
+					headers,
+					body: JSON.stringify(payload),
+				});
+
+				if (!res.ok) {
+					const text = await res.text();
+					throw SyncError.fromFetchResponse(res, text, {
+						operation: "create",
+						filePath,
+					});
+				}
+
+				return await res.json();
+			},
+			{ context: { operation: "create", filePath } },
+		);
+
 		const itemId = data?.id || data?.item?.id; // depending on response shape
-		log(`✅ Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
+		log(`Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
 		log(`   Created: ${data.createdOn || "N/A"} (system field)`);
 		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
 
@@ -626,7 +606,9 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 				itemId,
 			});
 		} catch (e) {
-			warn("repository_dispatch for writeback failed (non-fatal):", e.message);
+			warn(
+				`repository_dispatch for writeback failed (non-fatal): ${e.message}`,
+			);
 		}
 		return data;
 	}
@@ -690,24 +672,49 @@ async function processFile(filePath, opts) {
 
 async function main() {
 	log("=== Webflow Sync Script ===");
+
+	// Set correlation ID for this run
+	const correlationId =
+		process.env.CORRELATION_ID || process.env.GITHUB_RUN_ID
+			? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT || 1}`
+			: logger.getCorrelationId();
+	logger.setCorrelationId(correlationId);
+	auditLogger.setCorrelationId(correlationId);
+
+	// Validate environment variables
+	const envValidation = loadAndValidateEnv();
+
+	// Log configuration (with redaction)
 	log(`Repository: ${REPO || "(not set)"}`);
 	log(`Commit SHA: ${COMMIT_SHA || "(not set)"}`);
 	log(`Branch: ${BRANCH || "(not set)"}`);
-	log(`Collection ID: ${COLLECTION_ID ? COLLECTION_ID.substring(0, 8) + "..." : "(not set)"}`);
-	log(`Webflow Token: ${WEBFLOW_TOKEN ? "***" + WEBFLOW_TOKEN.slice(-4) : "(not set)"}`);
+	log(
+		`Collection ID: ${COLLECTION_ID ? COLLECTION_ID.substring(0, 8) + "..." : "(not set)"}`,
+	);
+	log(
+		`Webflow Token: ${WEBFLOW_TOKEN ? "***" + WEBFLOW_TOKEN.slice(-4) : "(not set)"}`,
+	);
+	log(`Correlation ID: ${correlationId}`);
 	log("");
 
-	try {
-		requireEnv("WEBFLOW_TOKEN");
-		requireEnv("WEBFLOW_COLLECTION_ID");
-	} catch (e) {
-		fail(e.message);
+	// Report validation errors
+	if (!envValidation.valid) {
+		for (const error of envValidation.errors) {
+			logger.error(`Configuration error: ${error}`);
+		}
+		fail("Environment validation failed");
 		return;
 	}
+
+	// Report validation warnings
+	for (const warning of envValidation.warnings) {
+		warn(`Configuration warning: ${warning}`);
+	}
+
 	const { all, dryRun } = parseArgs();
 
 	if (dryRun) {
-		log("🔍 DRY RUN MODE - No changes will be made to Webflow\n");
+		log("DRY RUN MODE - No changes will be made to Webflow\n");
 	}
 
 	const files = all ? getAllMarkdown() : getChangedMarkdown();
@@ -715,29 +722,69 @@ async function main() {
 		log(all ? "No markdown files found." : "No changed markdown files.");
 		return;
 	}
-	log(`\n📝 Found ${files.length} file(s) to process.\n`);
+	log(`\nFound ${files.length} file(s) to process.\n`);
 
 	let successCount = 0;
 	let errorCount = 0;
 
 	for (const f of files) {
+		const startTime = Date.now();
 		try {
 			await processFile(f, { dryRun });
 			successCount++;
+
+			// Record successful operation in audit log
+			auditLogger.recordOperation({
+				type: "SYNC",
+				filePath: f,
+				status: "SUCCESS",
+				durationMs: Date.now() - startTime,
+				dryRun,
+			});
 		} catch (e) {
 			errorCount++;
 			fail(`Failed processing ${f}`, e);
+
+			// Record failed operation in audit log
+			auditLogger.recordOperation({
+				type: "SYNC",
+				filePath: f,
+				status: "FAILED",
+				error: sanitizeString(e.message),
+				durationMs: Date.now() - startTime,
+				dryRun,
+			});
 		}
 	}
 
+	// Log summary
+	const summary = auditLogger.getSummary();
 	log("\n=== Summary ===");
-	log(`✅ Successfully processed: ${successCount}`);
+	log(`Successfully processed: ${successCount}`);
 	if (errorCount > 0) {
-		log(`❌ Failed: ${errorCount}`);
+		log(`Failed: ${errorCount}`);
 		process.exitCode = 1;
 	} else {
-		log("✅ All files processed successfully!");
+		log("All files processed successfully!");
 	}
+	logger.info("Sync complete", summary);
 }
 
-main().catch((e) => fail("Unhandled error", e));
+// Only run main() when executed directly (not when imported for testing)
+const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+if (isMainModule) {
+	main().catch((e) => fail("Unhandled error", e));
+}
+
+// Export functions for testing
+export {
+	kebab,
+	trimToExcerpt,
+	getUniqueId,
+	mdToHtml,
+	resolveToRawUrl,
+	rewriteImageLinksInMarkdown,
+	getAllMarkdown,
+	parseArgs,
+	main,
+};

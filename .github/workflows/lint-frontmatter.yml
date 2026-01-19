@@ -1,15 +1,18 @@
-name: Lint Markdown frontmatter
+name: Lint & Test
 
 on:
   pull_request:
     paths:
       - "posts/**/*.md"
+      - "tools/**/*.js"
+      - "tools/package.json"
+      - "tools/package-lock.json"
 
 permissions:
   contents: read
 
 jobs:
-  lint:
+  lint-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +25,14 @@ jobs:
 
       - name: Install deps
         run: npm ci
+        working-directory: tools
+
+      - name: Run Biome linter
+        run: npm run lint
+        working-directory: tools
+
+      - name: Run unit tests
+        run: npm test
         working-directory: tools
 
       - name: Validate frontmatter schema
