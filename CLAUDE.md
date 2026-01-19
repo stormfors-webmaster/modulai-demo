@@ -13,6 +13,7 @@ This is a **Webflow CMS ↔ GitHub Two-Way Sync** system. Blog posts are authore
 /images             # Image assets referenced by posts
 /tools              # Node.js sync and validation tools
   ├── sync-webflow.js         # Main sync script (Markdown → Webflow)
+  ├── clear-webflow.js        # Clear all items from Webflow collection
   ├── validate-frontmatter.js # Frontmatter schema validation
   ├── fetch-modulai-post.js   # Fetch blog posts from modulai.io
   ├── create-fields.js        # Webflow field creation utility
@@ -56,6 +57,14 @@ npm run fetch-post https://modulai.io/blog/my-post/ -- --save
 ```
 
 This tool fetches a blog post from modulai.io, extracts the content, downloads images, and creates a properly formatted markdown file with frontmatter.
+
+### Clear Webflow Collection
+```bash
+npm run clear:dry     # Preview items to delete (safe)
+npm run clear:force   # Actually delete all items (destructive!)
+```
+
+This tool deletes all items from the configured Webflow CMS collection. Use with caution - this operation is irreversible.
 
 ## Markdown Frontmatter Schema
 

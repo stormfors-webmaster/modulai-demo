@@ -15,6 +15,8 @@
 		"test:all": "node --test tools/test/**/*.test.js",
 		"test:watch": "node --test --watch tools/test/**/*.test.js",
 		"fetch-post": "node tools/fetch-modulai-post.js",
+		"clear:dry": "node tools/clear-webflow.js --dry-run",
+		"clear:force": "node tools/clear-webflow.js --force",
 		"lint": "npx @biomejs/biome check tools/",
 		"lint:fix": "npx @biomejs/biome check --write tools/",
 		"format": "npx @biomejs/biome format --write tools/"
