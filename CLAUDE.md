@@ -126,7 +126,31 @@ Required secrets for GitHub Actions:
 - `WEBFLOW_COLLECTION_ID`: Webflow collection ID
 - `GH_TOKEN_WITH_WRITE`: GitHub token with write permissions (for post_id writeback)
 
-For local development, create `.env.local` with these values.
+### Local Development Setup
+
+To sync directly from your local machine:
+
+1. Copy the example environment file:
+   ```bash
+   cp .env.example .env.local
+   ```
+
+2. Edit `.env.local` with your Webflow credentials:
+   ```bash
+   WEBFLOW_TOKEN=your_64_char_hex_token
+   WEBFLOW_COLLECTION_ID=your_24_char_collection_id
+   ```
+
+3. Run sync commands:
+   ```bash
+   npm run sync:dry   # Test without making changes
+   npm run sync:all   # Sync all posts
+   npm run sync       # Sync only changed posts (uses git diff)
+   ```
+
+The `.env.local` file is automatically loaded when running locally (skipped in CI).
+
+**GitHub CLI Integration:** If you have `gh` CLI installed and authenticated, the script automatically detects repository info, commit SHA, and branch name. No manual `GH_REPOSITORY` configuration needed.
 
 ## GitHub Actions Workflows
 

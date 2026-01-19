@@ -117,9 +117,64 @@ const POSTS_DIR = path.join(REPO_ROOT, "posts");
 const IMAGE_DIR = path.join(REPO_ROOT, "images");
 const COLLECTION_ID = process.env.WEBFLOW_COLLECTION_ID;
 const WEBFLOW_TOKEN = process.env.WEBFLOW_TOKEN;
-const REPO = process.env.GITHUB_REPOSITORY || process.env.GH_REPOSITORY; // owner/repo
-const COMMIT_SHA = process.env.GITHUB_SHA || "main";
-const BRANCH = process.env.GITHUB_REF_NAME || "main";
+
+// ---------- GitHub CLI / Git Helpers ----------
+/**
+ * Try to get repository info from GitHub CLI (gh)
+ * @returns {string|null} Repository in owner/repo format, or null if unavailable
+ */
+function getRepoFromGitHubCLI() {
+	try {
+		const result = execSync("gh repo view --json nameWithOwner -q .nameWithOwner", {
+			encoding: "utf8",
+			stdio: ["pipe", "pipe", "pipe"],
+			cwd: REPO_ROOT,
+			timeout: 5000,
+		}).trim();
+		return result || null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Try to get current commit SHA from git
+ * @returns {string} Commit SHA or "main" as fallback
+ */
+function getCommitShaFromGit() {
+	try {
+		return execSync("git rev-parse HEAD", {
+			encoding: "utf8",
+			stdio: ["pipe", "pipe", "pipe"],
+			cwd: REPO_ROOT,
+			timeout: 5000,
+		}).trim();
+	} catch {
+		return "main";
+	}
+}
+
+/**
+ * Try to get current branch name from git
+ * @returns {string} Branch name or "main" as fallback
+ */
+function getBranchFromGit() {
+	try {
+		return execSync("git rev-parse --abbrev-ref HEAD", {
+			encoding: "utf8",
+			stdio: ["pipe", "pipe", "pipe"],
+			cwd: REPO_ROOT,
+			timeout: 5000,
+		}).trim();
+	} catch {
+		return "main";
+	}
+}
+
+// Prefer env vars (CI), then GitHub CLI, then git directly
+const REPO = process.env.GITHUB_REPOSITORY || process.env.GH_REPOSITORY || getRepoFromGitHubCLI();
+const COMMIT_SHA = process.env.GITHUB_SHA || getCommitShaFromGit();
+const BRANCH = process.env.GITHUB_REF_NAME || getBranchFromGit();
 // Field slugs for Webflow v2 API (match your collection setup)
 // Run `node tools/fetch-schema.js` to get the correct field slugs for your collection
 // Note: Webflow v2 API uses field slugs in fieldData, not field IDs!
@@ -171,19 +226,22 @@ function parseArgs() {
 	};
 }
 
-// Logging wrappers using structured logger
-function log(...args) {
-	const message = args
-		.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a)))
-		.join(" ");
-	logger.info(message);
+/**
+ * Log an info message with optional structured data
+ * @param {string} message - Log message
+ * @param {object} [data] - Optional structured data to include
+ */
+function log(message, data) {
+	logger.info(message, data);
 }
 
-function warn(...args) {
-	const message = args
-		.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a)))
-		.join(" ");
-	logger.warn(message);
+/**
+ * Log a warning message with optional structured data
+ * @param {string} message - Warning message
+ * @param {object} [data] - Optional structured data to include
+ */
+function warn(message, data) {
+	logger.warn(message, data);
 }
 
 function fail(msg, e) {
@@ -211,6 +269,9 @@ function kebab(str) {
 		.replace(/^-+|-+$/g, "");
 }
 
+/** Default maximum character length for auto-generated excerpts */
+const DEFAULT_EXCERPT_MAX_LENGTH = 160;
+
 /**
  * Validate a git branch name to prevent shell injection
  * @param {string} branch - Branch name to validate
@@ -232,6 +293,10 @@ function validateBranchName(branch) {
 	return branch;
 }
 
+/**
+ * Get all markdown files from the posts directory
+ * @returns {string[]} Array of absolute paths to markdown files
+ */
 function getAllMarkdown() {
 	return fs.existsSync(POSTS_DIR) ? walk(POSTS_DIR, ".md") : [];
 }
@@ -328,7 +393,7 @@ function getChangedMarkdown() {
 			return [];
 		}
 	} catch (e) {
-		warn("git diff failed; trying alternative detection methods", e.message);
+		warn("git diff failed; trying alternative detection methods", { error: e.message });
 
 		// Strategy 3: Check if we're in GitHub Actions and use event context
 		// GitHub Actions provides GITHUB_EVENT_PATH with commit info
@@ -352,7 +417,7 @@ function getChangedMarkdown() {
 					return markdownFiles;
 				}
 			} catch (eventErr) {
-				warn("Could not parse GitHub event data", eventErr.message);
+				warn("Could not parse GitHub event data", { error: eventErr.message });
 			}
 		}
 
@@ -446,7 +511,7 @@ function rewriteImageLinksInMarkdown(md, fileDir) {
 	});
 }
 
-function trimToExcerpt(html, max = 160) {
+function trimToExcerpt(html, max = DEFAULT_EXCERPT_MAX_LENGTH) {
 	const text = html
 		.replace(/<style[\s\S]*?<\/style>/g, "")
 		.replace(/<script[\s\S]*?<\/script>/g, "")
@@ -479,12 +544,12 @@ function getUniqueId(fm, filePath) {
  * Fetch all Webflow items and build a cache for fast lookup
  * This is called once at startup instead of per-file lookups
  * Uses promise-based locking to prevent race conditions when called concurrently
- * @returns {Promise<Map<string, string>>} Map of github-id -> webflow item id
+ * @returns {Promise<{ byGithubId: Map<string, string>, bySlug: Map<string, string> }>} Cache with lookup maps
  */
 async function fetchAllWebflowItems() {
 	// If cache is already populated, return it
 	if (webflowItemCache !== null) {
-		log(`Using cached Webflow items (${webflowItemCache.size} items)`);
+		log(`Using cached Webflow items (${webflowItemCache.byGithubId.size} by github-id, ${webflowItemCache.bySlug.size} by slug)`);
 		return webflowItemCache;
 	}
 
@@ -507,7 +572,7 @@ async function fetchAllWebflowItems() {
 
 /**
  * Internal function to populate the Webflow item cache
- * @returns {Promise<Map<string, string>>} Map of github-id -> webflow item id
+ * @returns {Promise<{ byGithubId: Map<string, string>, bySlug: Map<string, string> }>} Cache object with maps
  * @private
  */
 async function _populateCacheInternal() {
@@ -519,7 +584,8 @@ async function _populateCacheInternal() {
 		accept: "application/json",
 	};
 
-	const cache = new Map();
+	const byGithubId = new Map();
+	const bySlug = new Map();
 	let offset = 0;
 	const limit = 100; // Webflow API max limit
 
@@ -546,11 +612,16 @@ async function _populateCacheInternal() {
 
 		const items = data.items || [];
 
-		// Build cache: github-id -> webflow item id
+		// Build caches: github-id -> webflow item id, slug -> webflow item id
 		for (const item of items) {
 			const githubId = item.fieldData?.[FIELD_IDS.githubId];
 			if (githubId) {
-				cache.set(githubId, item.id);
+				byGithubId.set(githubId, item.id);
+			}
+			// Also cache by slug for collision recovery
+			const slug = item.fieldData?.[FIELD_IDS.slug];
+			if (slug) {
+				bySlug.set(slug, item.id);
 			}
 		}
 
@@ -564,9 +635,9 @@ async function _populateCacheInternal() {
 	}
 
 	const duration = Date.now() - startTime;
-	log(`Cached ${cache.size} Webflow items in ${duration}ms`);
+	log(`Cached ${byGithubId.size} items by github-id, ${bySlug.size} items by slug in ${duration}ms`);
 
-	return cache;
+	return { byGithubId, bySlug };
 }
 
 /**
@@ -590,7 +661,7 @@ async function findItemByGithubId(githubId) {
 
 	// Use cached lookup (cache should be pre-populated by main())
 	const cache = await fetchAllWebflowItems();
-	const itemId = cache.get(githubId);
+	const itemId = cache.byGithubId.get(githubId);
 
 	if (itemId) {
 		log(`Found existing item by github-id (cached): ${itemId}`);
@@ -598,6 +669,55 @@ async function findItemByGithubId(githubId) {
 	}
 
 	return null;
+}
+
+/**
+ * Find Webflow item by slug field using cached data
+ * Used for recovering from slug collision errors during create
+ * @param {string} slug - The slug to search for
+ * @returns {Promise<string|null>} Webflow item ID if found, null otherwise
+ */
+async function findItemBySlug(slug) {
+	if (!FIELD_IDS.slug) {
+		warn("slug field not configured, skipping lookup");
+		return null;
+	}
+
+	// Use cached lookup (cache should be pre-populated by main())
+	const cache = await fetchAllWebflowItems();
+	const itemId = cache.bySlug.get(slug);
+
+	if (itemId) {
+		log(`Found existing item by slug (cached): ${itemId}`);
+		return itemId;
+	}
+
+	return null;
+}
+
+/**
+ * Check if an error is a slug uniqueness collision from Webflow API
+ * @param {Error} error - The error to check
+ * @returns {{ isSlugCollision: boolean, slug: string|null }} Result with collision status and slug if found
+ */
+function isSlugCollisionError(error) {
+	// Check if error message contains the Webflow validation error pattern
+	const message = error?.message || "";
+
+	// Match pattern: "Unique value is already in database: 'some-slug'"
+	const slugMatch = message.match(/Unique value is already in database:\s*'([^']+)'/);
+	if (slugMatch && message.includes('"param":"slug"')) {
+		return { isSlugCollision: true, slug: slugMatch[1] };
+	}
+
+	// Also check for validation_error code with slug param
+	if (message.includes("validation_error") && message.includes('"param":"slug"')) {
+		// Try to extract slug from the message
+		const altMatch = message.match(/'([^']+)'/);
+		return { isSlugCollision: true, slug: altMatch ? altMatch[1] : null };
+	}
+
+	return { isSlugCollision: false, slug: null };
 }
 
 async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
@@ -642,7 +762,7 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 			: undefined;
 	const excerpt = fm.excerpt
 		? String(fm.excerpt)
-		: trimToExcerpt(bodyHtml, 160);
+		: trimToExcerpt(bodyHtml);
 	const seoTitle = fm?.seo?.title;
 	const seoDescription = fm?.seo?.description;
 
@@ -692,7 +812,7 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 
 	if (dryRun) {
 		log("(dry-run) UPSERT", { slug, hasPostId: Boolean(fm.post_id), githubId });
-		log("(dry-run) Payload:", JSON.stringify(payload, null, 2));
+		log("(dry-run) Payload:", { payload });
 		return null;
 	}
 
@@ -744,36 +864,99 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 	} else {
 		// Create new
 		log(`Creating new Webflow item for ${filePath}`);
-		const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items`;
+		const createUrl = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items`;
 
-		const data = await retryWithBackoff(
-			async () => {
-				await rateLimiter.waitIfNeeded();
-				const res = await fetch(url, {
-					method: "POST",
-					headers,
-					body: JSON.stringify(payload),
-				});
+		let itemId;
 
-				if (!res.ok) {
-					const text = await res.text();
-					throw SyncError.fromFetchResponse(res, text, {
-						operation: "create",
-						filePath,
+		try {
+			// Note: HTTP 400 (slug collision) is classified as CLIENT_ERROR, which is not retryable
+			// So if a slug collision occurs, it will throw immediately and we handle it below
+			const data = await retryWithBackoff(
+				async () => {
+					await rateLimiter.waitIfNeeded();
+					const res = await fetch(createUrl, {
+						method: "POST",
+						headers,
+						body: JSON.stringify(payload),
 					});
-				}
 
-				return await res.json();
-			},
-			{ context: { operation: "create", filePath } },
-		);
+					if (!res.ok) {
+						const text = await res.text();
+						throw SyncError.fromFetchResponse(res, text, {
+							operation: "create",
+							filePath,
+						});
+					}
 
-		const itemId = data?.id || data?.item?.id; // depending on response shape
-		log(`Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
-		log(`   Created: ${data.createdOn || "N/A"} (system field)`);
-		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
+					return await res.json();
+				},
+				{ context: { operation: "create", filePath } },
+			);
+
+			itemId = data?.id || data?.item?.id; // depending on response shape
+			log(`Created Webflow item ${itemId || "(unknown)"} for ${filePath}`);
+			log(`   Created: ${data.createdOn || "N/A"} (system field)`);
+			log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
+		} catch (createError) {
+			// Check if this is a slug collision error
+			const { isSlugCollision, slug: collisionSlug } = isSlugCollisionError(createError);
+
+			if (!isSlugCollision) {
+				// Not a slug collision, re-throw the original error
+				throw createError;
+			}
+
+			// Slug collision detected - find existing item and update instead
+			const slugToFind = collisionSlug || slug;
+			log(`Slug collision detected for '${slugToFind}', attempting to find and update existing item...`);
+
+			// Try to find the existing item by slug
+			const existingItemId = await findItemBySlug(slugToFind);
+
+			if (!existingItemId) {
+				// Could not find the item - this shouldn't happen but handle gracefully
+				warn(`Could not find existing item with slug '${slugToFind}' despite collision error`);
+				warn(`This may indicate the item was created between cache fetch and now`);
+				// Re-throw the original error since we can't recover
+				throw createError;
+			}
+
+			// Update the existing item instead
+			log(`Found existing item ${existingItemId}, updating instead of creating...`);
+
+			const updateUrl = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items/${encodeURIComponent(existingItemId)}`;
+
+			const updateData = await retryWithBackoff(
+				async () => {
+					await rateLimiter.waitIfNeeded();
+					const res = await fetch(updateUrl, {
+						method: "PATCH",
+						headers,
+						body: JSON.stringify(payload),
+					});
+
+					if (!res.ok) {
+						const text = await res.text();
+						throw SyncError.fromFetchResponse(res, text, {
+							operation: "update-after-collision",
+							webflowItemId: existingItemId,
+							filePath,
+						});
+					}
+
+					return await res.json();
+				},
+				{ context: { operation: "update-after-collision", webflowItemId: existingItemId, filePath } },
+			);
+
+			itemId = existingItemId;
+			log(`Updated existing Webflow item ${itemId} after slug collision for ${filePath}`);
+			log(`   Last Updated: ${updateData.lastUpdated || "N/A"} (system field)`);
+		}
 
 		// Emit repository_dispatch so a separate workflow can write back post_id
+		// This is needed for both create and update-after-collision scenarios
+		// since the markdown file doesn't have the post_id yet
 		// Requires a token with repo:dispatch scope; usually GITHUB_TOKEN works in the same repo.
 		// Failure behavior controlled by SYNC_WRITEBACK_FATAL env var
 		try {
@@ -861,6 +1044,14 @@ async function dispatchWriteback({ path: filePath, itemId }) {
 	log(`repository_dispatch sent for ${filePath} -> itemId=${itemId}`);
 }
 
+/**
+ * Process a single markdown file and sync it to Webflow
+ * Parses frontmatter, converts markdown to HTML, and upserts to Webflow CMS
+ * @param {string} filePath - Absolute path to the markdown file
+ * @param {object} opts - Processing options
+ * @param {boolean} [opts.dryRun=false] - If true, skip Webflow API calls
+ * @returns {Promise<string|null>} Webflow item ID if synced, null if skipped
+ */
 async function processFile(filePath, opts) {
 	log(`\n--- Processing file: ${filePath} ---`);
 	const src = await fs.promises.readFile(filePath, "utf8");
@@ -901,6 +1092,12 @@ async function processFile(filePath, opts) {
 	return itemId;
 }
 
+/**
+ * Main entry point for the Webflow sync script
+ * Processes markdown files and syncs them to Webflow CMS
+ * Supports --all (sync all files) and --dry-run (preview changes) flags
+ * @returns {Promise<void>}
+ */
 async function main() {
 	log("=== Webflow Sync Script ===");
 
@@ -943,6 +1140,13 @@ async function main() {
 	// Report validation warnings
 	for (const warning of envValidation.warnings) {
 		warn(`Configuration warning: ${warning}`);
+	}
+
+	// Warn about missing repo in local development
+	const isLocalDev = process.env.CI !== "true" && process.env.GITHUB_ACTIONS !== "true";
+	if (isLocalDev && !REPO) {
+		warn("GH_REPOSITORY not set - relative image paths will not be converted to GitHub URLs");
+		warn("Add GH_REPOSITORY=owner/repo to .env.local for full local sync support");
 	}
 
 	const { all, dryRun } = parseArgs();
@@ -1104,5 +1308,7 @@ export {
 	publishItems,
 	validateBranchName,
 	isShutdownRequested,
+	isSlugCollisionError,
+	findItemBySlug,
 	CONCURRENCY_LIMIT,
 };
