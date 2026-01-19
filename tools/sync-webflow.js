@@ -59,6 +59,8 @@ const CONCURRENCY_LIMIT = 5; // Process up to 5 files in parallel
 // ---------- Webflow Item Cache ----------
 // Cache of all Webflow items, keyed by github-id for fast lookup
 let webflowItemCache = null;
+// Promise-based lock to prevent concurrent cache population (race condition prevention)
+let cachePopulationPromise = null;
 
 // ---------- Config you may tweak ----------
 // Resolve repo root relative to this script's location
@@ -396,14 +398,39 @@ function getUniqueId(fm, filePath) {
 /**
  * Fetch all Webflow items and build a cache for fast lookup
  * This is called once at startup instead of per-file lookups
+ * Uses promise-based locking to prevent race conditions when called concurrently
  * @returns {Promise<Map<string, string>>} Map of github-id -> webflow item id
  */
 async function fetchAllWebflowItems() {
+	// If cache is already populated, return it
 	if (webflowItemCache !== null) {
 		log(`Using cached Webflow items (${webflowItemCache.size} items)`);
 		return webflowItemCache;
 	}
 
+	// If population is in progress, wait for it (prevents race condition)
+	if (cachePopulationPromise !== null) {
+		log("Waiting for in-progress cache population...");
+		return cachePopulationPromise;
+	}
+
+	// Start population and store the promise
+	cachePopulationPromise = _populateCacheInternal();
+
+	try {
+		webflowItemCache = await cachePopulationPromise;
+		return webflowItemCache;
+	} finally {
+		cachePopulationPromise = null;
+	}
+}
+
+/**
+ * Internal function to populate the Webflow item cache
+ * @returns {Promise<Map<string, string>>} Map of github-id -> webflow item id
+ * @private
+ */
+async function _populateCacheInternal() {
 	log("Fetching all Webflow items for batch lookup...");
 	const startTime = Date.now();
 
@@ -456,11 +483,18 @@ async function fetchAllWebflowItems() {
 		offset += limit;
 	}
 
-	webflowItemCache = cache;
 	const duration = Date.now() - startTime;
 	log(`Cached ${cache.size} Webflow items in ${duration}ms`);
 
 	return cache;
+}
+
+/**
+ * Reset the Webflow item cache (for testing)
+ */
+function resetWebflowItemCache() {
+	webflowItemCache = null;
+	cachePopulationPromise = null;
 }
 
 /**
@@ -492,12 +526,12 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 
 	if (!pushFlag) {
 		log(`Skipping (push_to_webflow is not true): ${filePath}`);
-		return;
+		return null;
 	}
 
 	if (!published) {
 		log(`Skipping (published is not true): ${filePath}`);
-		return;
+		return null;
 	}
 	if (!fm.title) throw new Error(`Missing required 'title' in ${filePath}`);
 
@@ -579,7 +613,7 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 	if (dryRun) {
 		log("(dry-run) UPSERT", { slug, hasPostId: Boolean(fm.post_id), githubId });
 		log("(dry-run) Payload:", JSON.stringify(payload, null, 2));
-		return;
+		return null;
 	}
 
 	// Determine which Webflow item ID to use
@@ -626,7 +660,7 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 
 		log(`Updated Webflow item ${webflowItemId} for ${filePath}`);
 		log(`   Last Updated: ${data.lastUpdated || "N/A"} (system field)`);
-		return data;
+		return webflowItemId;
 	} else {
 		// Create new
 		log(`Creating new Webflow item for ${filePath}`);
@@ -671,8 +705,50 @@ async function upsertWebflowItem({ fm, html, filePath, dryRun }) {
 				`repository_dispatch for writeback failed (non-fatal): ${e.message}`,
 			);
 		}
-		return data;
+		return itemId;
 	}
+}
+
+/**
+ * Publish item(s) to the live site
+ * @param {string[]} itemIds - Array of Webflow item IDs to publish
+ */
+async function publishItems(itemIds) {
+	if (!itemIds || itemIds.length === 0) return;
+
+	const url = `https://api.webflow.com/v2/collections/${COLLECTION_ID}/items/publish`;
+	const headers = {
+		Authorization: `Bearer ${WEBFLOW_TOKEN}`,
+		"Content-Type": "application/json",
+		accept: "application/json",
+	};
+
+	const payload = { itemIds };
+
+	const data = await retryWithBackoff(
+		async () => {
+			await rateLimiter.waitIfNeeded();
+			const res = await fetch(url, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(payload),
+			});
+
+			if (!res.ok) {
+				const text = await res.text();
+				throw SyncError.fromFetchResponse(res, text, {
+					operation: "publish",
+					itemIds,
+				});
+			}
+
+			return await res.json();
+		},
+		{ context: { operation: "publish", itemIds } },
+	);
+
+	log(`Published ${itemIds.length} item(s) to live site`);
+	return data;
 }
 
 async function dispatchWriteback({ path: filePath, itemId }) {
@@ -722,13 +798,14 @@ async function processFile(filePath, opts) {
 	const html = await mdToHtml(mdWithRaw);
 	log(`Converted markdown to HTML (${html.length} chars)`);
 
-	await upsertWebflowItem({
+	const itemId = await upsertWebflowItem({
 		fm: fm.data,
 		html,
 		filePath,
 		dryRun: opts.dryRun,
 	});
 	log(`✅ Completed processing: ${filePath}\n`);
+	return itemId;
 }
 
 async function main() {
@@ -798,7 +875,7 @@ async function main() {
 	const processWithTracking = async (f) => {
 		const startTime = Date.now();
 		try {
-			await processFile(f, { dryRun });
+			const itemId = await processFile(f, { dryRun });
 
 			// Record successful operation in audit log
 			auditLogger.recordOperation({
@@ -809,7 +886,7 @@ async function main() {
 				dryRun,
 			});
 
-			return { file: f, success: true };
+			return { file: f, success: true, itemId };
 		} catch (e) {
 			fail(`Failed processing ${f}`, e);
 
@@ -842,19 +919,40 @@ async function main() {
 		results.push(...batchResults);
 	}
 
-	// Count results
+	// Count results and collect item IDs for publishing
+	const itemIdsToPublish = [];
 	for (const result of results) {
 		if (result.success) {
 			successCount++;
+			if (result.itemId) {
+				itemIdsToPublish.push(result.itemId);
+			}
 		} else {
 			errorCount++;
 		}
+	}
+
+	// Publish all successfully synced items to the live site
+	if (!dryRun && itemIdsToPublish.length > 0) {
+		log(`\n--- Publishing ${itemIdsToPublish.length} item(s) to live site ---`);
+		try {
+			await publishItems(itemIdsToPublish);
+			log("✅ Items published to live site");
+		} catch (e) {
+			fail("Failed to publish items to live site", e);
+			errorCount++;
+		}
+	} else if (dryRun && itemIdsToPublish.length > 0) {
+		log(`\n(dry-run) Would publish ${itemIdsToPublish.length} item(s) to live site`);
 	}
 
 	// Log summary
 	const summary = auditLogger.getSummary();
 	log("\n=== Summary ===");
 	log(`Successfully processed: ${successCount}`);
+	if (itemIdsToPublish.length > 0) {
+		log(`Published to live site: ${itemIdsToPublish.length}`);
+	}
 	if (errorCount > 0) {
 		log(`Failed: ${errorCount}`);
 		process.exitCode = 1;
@@ -882,5 +980,7 @@ export {
 	parseArgs,
 	main,
 	fetchAllWebflowItems,
+	resetWebflowItemCache,
+	publishItems,
 	CONCURRENCY_LIMIT,
 };

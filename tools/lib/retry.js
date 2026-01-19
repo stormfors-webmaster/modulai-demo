@@ -156,8 +156,10 @@ export async function withTimeout(
 	timeoutMs,
 	message = "Operation timed out",
 ) {
+	let timeoutId;
+
 	const timeoutPromise = new Promise((_, reject) => {
-		setTimeout(() => {
+		timeoutId = setTimeout(() => {
 			const error = new SyncError(message, {
 				type: "RETRYABLE_NETWORK",
 				context: { timeoutMs },
@@ -166,7 +168,11 @@ export async function withTimeout(
 		}, timeoutMs);
 	});
 
-	return Promise.race([fn(), timeoutPromise]);
+	try {
+		return await Promise.race([fn(), timeoutPromise]);
+	} finally {
+		clearTimeout(timeoutId);
+	}
 }
 
 /**
@@ -174,7 +180,7 @@ export async function withTimeout(
  * @param {Array} items - Items to process
  * @param {Function} fn - Async function to apply to each item
  * @param {number} [concurrency=5] - Maximum concurrent operations
- * @returns {Promise<Array>} Results
+ * @returns {Promise<Array>} Results (throws AggregateError if any failures, with partial results on error.results)
  */
 export async function batchWithConcurrency(items, fn, concurrency = 5) {
 	const results = [];
@@ -205,10 +211,23 @@ export async function batchWithConcurrency(items, fn, concurrency = 5) {
 	// Reorder by original index
 	settled.sort((a, b) => a.index - b.index);
 
-	return settled.map((s) => {
-		if (s.status === "fulfilled") {
-			return s.result;
-		}
-		throw s.error;
-	});
+	// Collect all errors and successful results
+	const errors = settled
+		.filter((s) => s.status === "rejected")
+		.map((s) => s.error);
+	const successResults = settled.map((s) =>
+		s.status === "fulfilled" ? s.result : undefined,
+	);
+
+	// If any errors occurred, throw AggregateError with partial results attached
+	if (errors.length > 0) {
+		const aggregateError = new AggregateError(
+			errors,
+			`${errors.length} of ${items.length} operations failed`,
+		);
+		aggregateError.results = successResults;
+		throw aggregateError;
+	}
+
+	return successResults;
 }
