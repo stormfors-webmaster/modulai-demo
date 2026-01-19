@@ -19,7 +19,7 @@ seo:
 
 ## **Background **
 
-Drug development is one of the most expensive, time-intensive, and uncertain processes in modern science.
+Drug development is one of the most expensive, time-intensive, and uncertain processes in modern science. new version
 
 - **Timeline**: Bringing a new medicine from discovery to market typically takes 10-15 years [1]. 
 
