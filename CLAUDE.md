@@ -14,6 +14,7 @@ This is a **Webflow CMS ↔ GitHub Two-Way Sync** system. Blog posts are authore
 /tools              # Node.js sync and validation tools
   ├── sync-webflow.js         # Main sync script (Markdown → Webflow)
   ├── validate-frontmatter.js # Frontmatter schema validation
+  ├── fetch-modulai-post.js   # Fetch blog posts from modulai.io
   ├── create-fields.js        # Webflow field creation utility
   ├── fetch-schema.js         # Fetch Webflow collection schema
   └── inspect-items.js        # Inspect Webflow collection items
@@ -41,6 +42,19 @@ cd tools && npm run validate      # Validate all posts in /posts
 ```bash
 cd tools && npm ci                # Install from lockfile
 ```
+
+### Fetch Modulai Blog Post
+```bash
+cd tools && npm run fetch-post <url>           # Output JSON (for inspection)
+cd tools && npm run fetch-post <url> -- --save # Save markdown and images directly
+```
+
+Example:
+```bash
+cd tools && npm run fetch-post https://modulai.io/blog/my-post/ -- --save
+```
+
+This tool fetches a blog post from modulai.io, extracts the content, downloads images, and creates a properly formatted markdown file with frontmatter.
 
 ## Markdown Frontmatter Schema
 

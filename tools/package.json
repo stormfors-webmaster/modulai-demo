@@ -12,6 +12,7 @@
 		"test-sync": "node testing/test-sync.js",
 		"test": "node --test test/**/*.test.js",
 		"test:watch": "node --test --watch test/**/*.test.js",
+		"fetch-post": "node fetch-modulai-post.js",
 		"lint": "npx @biomejs/biome check .",
 		"lint:fix": "npx @biomejs/biome check --write .",
 		"format": "npx @biomejs/biome format --write ."
