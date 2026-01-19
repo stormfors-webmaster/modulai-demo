@@ -431,7 +431,116 @@ function getChangedMarkdown() {
 	}
 }
 
+/**
+ * Detect and convert space/tab-separated pseudo-tables to GFM table syntax
+ * This handles cases where tables are formatted with spaces/tabs instead of pipes
+ * @param {string} markdown - Raw markdown content
+ * @returns {string} Markdown with pseudo-tables converted to GFM format
+ */
+function convertPseudoTablesToGfm(markdown) {
+	const lines = markdown.split('\n');
+	const result = [];
+	let i = 0;
+
+	while (i < lines.length) {
+		const line = lines[i];
+
+		// Check if this line could be the start of a pseudo-table
+		// Must have multiple tab-separated or multi-space-separated values
+		const tabColumns = line.split('\t').map(c => c.trim()).filter(Boolean);
+		const spaceColumns = line.split(/\s{2,}/).map(c => c.trim()).filter(Boolean);
+
+		// Use tab-separated if we have 3+ columns, otherwise try space-separated
+		const columns = tabColumns.length >= 3 ? tabColumns : spaceColumns;
+		const delimiter = tabColumns.length >= 3 ? '\t' : /\s{2,}/;
+
+		// Need at least 3 columns and at least 2 rows to be considered a table
+		if (columns.length >= 3) {
+			// Look ahead to see if next lines have similar structure
+			const tableLines = [{ line, columns }];
+			let j = i + 1;
+
+			while (j < lines.length) {
+				const nextLine = lines[j];
+
+				// Empty line or line that doesn't match pattern ends the potential table
+				if (!nextLine.trim()) break;
+
+				const nextTabCols = nextLine.split('\t').map(c => c.trim()).filter(Boolean);
+				const nextSpaceCols = nextLine.split(/\s{2,}/).map(c => c.trim()).filter(Boolean);
+				const nextColumns = tabColumns.length >= 3 ? nextTabCols : nextSpaceCols;
+
+				// Check if column count is similar (within 1 to allow for empty cells)
+				if (Math.abs(nextColumns.length - columns.length) <= 1 && nextColumns.length >= 2) {
+					tableLines.push({ line: nextLine, columns: nextColumns });
+					j++;
+				} else {
+					break;
+				}
+			}
+
+			// If we have at least 2 lines with similar column structure, convert to GFM table
+			if (tableLines.length >= 2) {
+				// Determine the max column count
+				const maxCols = Math.max(...tableLines.map(t => t.columns.length));
+
+				// Convert to GFM format
+				for (let k = 0; k < tableLines.length; k++) {
+					const cols = tableLines[k].columns;
+					// Pad columns to match max
+					while (cols.length < maxCols) cols.push('');
+					result.push('| ' + cols.join(' | ') + ' |');
+
+					// Add header separator after first row
+					if (k === 0) {
+						result.push('| ' + cols.map(() => '---').join(' | ') + ' |');
+					}
+				}
+
+				i = j;
+				continue;
+			}
+		}
+
+		// Not a pseudo-table, keep the line as-is
+		result.push(line);
+		i++;
+	}
+
+	return result.join('\n');
+}
+
+/**
+ * Rehype plugin to add styling to tables for Webflow Rich Text compatibility
+ * Adds inline styles to ensure tables display properly
+ */
+function rehypeStyleTables() {
+	return (tree) => {
+		const visit = (node) => {
+			if (node.type === 'element') {
+				if (node.tagName === 'table') {
+					node.properties = node.properties || {};
+					node.properties.style = 'width: 100%; border-collapse: collapse; margin: 1em 0;';
+				} else if (node.tagName === 'th') {
+					node.properties = node.properties || {};
+					node.properties.style = 'border: 1px solid #ddd; padding: 8px 12px; text-align: left; background-color: #f5f5f5; font-weight: bold;';
+				} else if (node.tagName === 'td') {
+					node.properties = node.properties || {};
+					node.properties.style = 'border: 1px solid #ddd; padding: 8px 12px; text-align: left;';
+				}
+			}
+			if (node.children) {
+				node.children.forEach(visit);
+			}
+		};
+		visit(tree);
+	};
+}
+
 async function mdToHtml(markdown) {
+	// Convert pseudo-tables (tab/space-separated) to GFM format before processing
+	const processedMarkdown = convertPseudoTablesToGfm(markdown);
+
 	// Allow code/pre/table/figure/figcaption in sanitation
 	const schema = structuredClone(defaultSchema);
 	schema.tagNames = Array.from(
@@ -454,14 +563,20 @@ async function mdToHtml(markdown) {
 		code: ["className"],
 		img: ["src", "alt", "title", "width", "height", "loading"],
 		a: ["href", "title", "target", "rel"],
+		// Table element attributes for proper Webflow rendering
+		table: ["className", "style"],
+		th: ["scope", "align", "style"],
+		td: ["align", "style"],
+		tr: ["style"],
 	};
 	const file = await unified()
 		.use(remarkParse)
 		.use(remarkGfm)
 		.use(remarkRehype, { allowDangerousHtml: false })
+		.use(rehypeStyleTables)
 		.use(rehypeSanitize, schema)
 		.use(rehypeStringify)
-		.process(markdown);
+		.process(processedMarkdown);
 	return String(file);
 }
 
@@ -1298,6 +1413,7 @@ export {
 	trimToExcerpt,
 	getUniqueId,
 	mdToHtml,
+	convertPseudoTablesToGfm,
 	resolveToRawUrl,
 	rewriteImageLinksInMarkdown,
 	getAllMarkdown,
