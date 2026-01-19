@@ -161,7 +161,8 @@ function parseHtmlContent(html, url) {
 }
 
 /**
- * Convert HTML to Markdown (basic conversion)
+ * Convert HTML to Markdown with improved handling of edge cases
+ * Handles callout boxes, styled divs, code blocks, and other WordPress patterns
  */
 function htmlToMarkdown(html) {
 	if (!html) return "";
@@ -172,13 +173,43 @@ function htmlToMarkdown(html) {
 	md = md.replace(/<script[\s\S]*?<\/script>/gi, "");
 	md = md.replace(/<style[\s\S]*?<\/style>/gi, "");
 
-	// Convert headings
-	md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, "\n# $1\n");
-	md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, "\n## $1\n");
-	md = md.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, "\n### $1\n");
-	md = md.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, "\n#### $1\n");
-	md = md.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, "\n##### $1\n");
-	md = md.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, "\n###### $1\n");
+	// Remove WordPress spacer blocks
+	md = md.replace(/<div[^>]*class="[^"]*wp-block-spacer[^"]*"[^>]*>[\s\S]*?<\/div>/gi, "\n");
+
+	// Convert callout/info boxes (styled divs with emoji headers) to blockquotes
+	// Pattern: div with background-color style containing h3 with emoji
+	md = md.replace(
+		/<div[^>]*style="[^"]*background-color[^"]*"[^>]*>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>([\s\S]*?)<\/div>/gi,
+		(match, title, content) => {
+			// Clean up the title and content
+			const cleanTitle = title.replace(/<[^>]+>/g, "").trim();
+			const cleanContent = content
+				.replace(/<[^>]+>/g, " ")
+				.replace(/\s+/g, " ")
+				.trim();
+			return `\n> **${cleanTitle}**\n> ${cleanContent}\n`;
+		}
+	);
+
+	// Convert styled code boxes (drug-discovery-codebox class pattern)
+	md = md.replace(
+		/<div[^>]*class="[^"]*codebox[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+		(match, content) => {
+			const cleanContent = content
+				.replace(/<br\s*\/?>/gi, "\n")
+				.replace(/<[^>]+>/g, "")
+				.trim();
+			return `\n\`\`\`\n${cleanContent}\n\`\`\`\n`;
+		}
+	);
+
+	// Convert headings - strip any inline styles/formatting from heading text
+	md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (m, c) => `\n# ${c.replace(/<[^>]+>/g, "").trim()}\n`);
+	md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, (m, c) => `\n## ${c.replace(/<[^>]+>/g, "").trim()}\n`);
+	md = md.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (m, c) => `\n### ${c.replace(/<[^>]+>/g, "").trim()}\n`);
+	md = md.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, (m, c) => `\n#### ${c.replace(/<[^>]+>/g, "").trim()}\n`);
+	md = md.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, (m, c) => `\n##### ${c.replace(/<[^>]+>/g, "").trim()}\n`);
+	md = md.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, (m, c) => `\n###### ${c.replace(/<[^>]+>/g, "").trim()}\n`);
 
 	// Convert bold and italic
 	md = md.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, "**$1**");
@@ -189,53 +220,124 @@ function htmlToMarkdown(html) {
 	// Convert links
 	md = md.replace(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, "[$2]($1)");
 
-	// Convert images
+	// Convert images - handle both orderings of src and alt
 	md = md.replace(
 		/<img[^>]+src="([^"]+)"[^>]*alt="([^"]*)"[^>]*\/?>/gi,
 		"![$2]($1)"
 	);
+	md = md.replace(
+		/<img[^>]+alt="([^"]*)"[^>]*src="([^"]+)"[^>]*\/?>/gi,
+		"![$1]($2)"
+	);
 	md = md.replace(/<img[^>]+src="([^"]+)"[^>]*\/?>/gi, "![]($1)");
 
-	// Convert code blocks
+	// Convert figures with captions
+	md = md.replace(/<figure[^>]*>([\s\S]*?)<figcaption[^>]*>([\s\S]*?)<\/figcaption>[\s\S]*?<\/figure>/gi,
+		(m, img, caption) => {
+			const imgMd = img.replace(/<[^>]+>/g, "").trim() || img;
+			const captionText = caption.replace(/<[^>]+>/g, "").trim();
+			return `${imgMd}\n\n*${captionText}*\n`;
+		}
+	);
+	md = md.replace(/<figure[^>]*>([\s\S]*?)<\/figure>/gi, "$1");
+	md = md.replace(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/gi, "\n*$1*\n");
+
+	// Convert code blocks with language detection
+	md = md.replace(
+		/<pre[^>]*><code[^>]*class="[^"]*language-([^"]*)"[^>]*>([\s\S]*?)<\/code><\/pre>/gi,
+		"\n```$1\n$2\n```\n"
+	);
 	md = md.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, "\n```\n$1\n```\n");
+	md = md.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, "\n```\n$1\n```\n");
 	md = md.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, "`$1`");
 
-	// Convert lists
+	// Convert lists - handle nested structures better
 	md = md.replace(/<ul[^>]*>([\s\S]*?)<\/ul>/gi, (match, content) => {
-		return content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, "- $1\n");
+		return "\n" + content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (m, li) => {
+			// Clean up the list item content
+			const cleanLi = li.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+			return `- ${cleanLi}\n`;
+		});
 	});
 	md = md.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (match, content) => {
 		let i = 1;
-		return content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, () => `${i++}. $1\n`);
+		return "\n" + content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (m, li) => {
+			const cleanLi = li.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+			return `${i++}. ${cleanLi}\n`;
+		});
 	});
 
 	// Convert blockquotes
 	md = md.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (match, content) => {
-		return content.split("\n").map(line => `> ${line}`).join("\n");
+		const cleanContent = content.replace(/<[^>]+>/g, "").trim();
+		return cleanContent.split("\n").map(line => `> ${line.trim()}`).join("\n") + "\n";
 	});
 
 	// Convert paragraphs
 	md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, "\n$1\n");
 
-	// Convert line breaks
+	// Convert line breaks and horizontal rules
 	md = md.replace(/<br\s*\/?>/gi, "\n");
+	md = md.replace(/<hr\s*\/?>/gi, "\n---\n");
+
+	// Remove divs and spans but keep content
+	md = md.replace(/<\/?div[^>]*>/gi, "\n");
+	md = md.replace(/<\/?span[^>]*>/gi, "");
 
 	// Remove remaining HTML tags
 	md = md.replace(/<[^>]+>/g, "");
 
-	// Decode HTML entities
-	md = md.replace(/&nbsp;/g, " ");
-	md = md.replace(/&amp;/g, "&");
-	md = md.replace(/&lt;/g, "<");
-	md = md.replace(/&gt;/g, ">");
-	md = md.replace(/&quot;/g, '"');
-	md = md.replace(/&#39;/g, "'");
-	md = md.replace(/&mdash;/g, "—");
-	md = md.replace(/&ndash;/g, "–");
-	md = md.replace(/&hellip;/g, "...");
+	// Decode HTML entities (comprehensive list)
+	const entities = {
+		"&nbsp;": " ",
+		"&amp;": "&",
+		"&lt;": "<",
+		"&gt;": ">",
+		"&quot;": '"',
+		"&#39;": "'",
+		"&#x27;": "'",
+		"&apos;": "'",
+		"&mdash;": "—",
+		"&ndash;": "–",
+		"&hellip;": "...",
+		"&#8211;": "–",
+		"&#8212;": "—",
+		"&#8217;": "'",
+		"&#8216;": "'",
+		"&#8220;": '"',
+		"&#8221;": '"',
+		"&#8230;": "...",
+		"&lsquo;": "'",
+		"&rsquo;": "'",
+		"&ldquo;": '"',
+		"&rdquo;": '"',
+		"&bull;": "•",
+		"&middot;": "·",
+		"&copy;": "©",
+		"&reg;": "®",
+		"&trade;": "™",
+		"&deg;": "°",
+		"&plusmn;": "±",
+		"&times;": "×",
+		"&divide;": "÷",
+		"&frac12;": "½",
+		"&frac14;": "¼",
+		"&frac34;": "¾",
+	};
+	for (const [entity, char] of Object.entries(entities)) {
+		md = md.split(entity).join(char);
+	}
+	// Handle numeric entities
+	md = md.replace(/&#(\d+);/g, (m, code) => String.fromCharCode(parseInt(code, 10)));
+	md = md.replace(/&#x([0-9a-fA-F]+);/g, (m, code) => String.fromCharCode(parseInt(code, 16)));
+
+	// Clean up bullet point characters to standard markdown
+	md = md.replace(/^[ \t]*[•◦▪▸][ \t]*/gm, "- ");
 
 	// Clean up whitespace
-	md = md.replace(/\n{3,}/g, "\n\n");
+	md = md.replace(/[ \t]+$/gm, "");  // Trailing whitespace on lines
+	md = md.replace(/^\s+$/gm, "");     // Lines with only whitespace
+	md = md.replace(/\n{3,}/g, "\n\n"); // Multiple blank lines
 	md = md.trim();
 
 	return md;

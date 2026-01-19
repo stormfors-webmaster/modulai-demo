@@ -432,6 +432,103 @@ function getChangedMarkdown() {
 }
 
 /**
+ * Clean up markup edge cases before markdown processing
+ * Handles common issues from WordPress/HTML-to-Markdown conversions
+ * @param {string} markdown - Raw markdown content
+ * @returns {string} Cleaned markdown
+ */
+function cleanupMarkdownEdgeCases(markdown) {
+	let md = markdown;
+
+	// 1. Normalize bullet point characters (•, ◦, ▪, ▸) to standard markdown
+	md = md.replace(/^[ \t]*[•◦▪▸][ \t]*/gm, '- ');
+
+	// 2. Clean up bold markers inside headings: ## **Title** → ## Title
+	// Also handles trailing spaces inside bold: ## **Title **
+	md = md.replace(/^(#{1,6})\s*\*\*([^*]+?)\s*\*\*\s*$/gm, '$1 $2');
+
+	// 3. Remove trailing spaces from heading lines
+	md = md.replace(/^(#{1,6}\s+.+?)\s+$/gm, '$1');
+
+	// 4. Clean up emoji callout boxes - detect patterns like:
+	//    ### 📦 Title
+	//    (followed by fragmented content)
+	// Convert to blockquote format for better rendering
+	md = md.replace(
+		/^###\s*\n?\s*([\u{1F300}-\u{1F9FF}])\s*\n?\s*(.+?)$/gmu,
+		'> **$1 $2**'
+	);
+
+	// 5. Collapse runs of 3+ blank lines to 2
+	md = md.replace(/\n{4,}/g, '\n\n\n');
+
+	// 6. Clean up orphaned bullet fragments (lines with just "•" or whitespace around bullets)
+	md = md.replace(/^\s*•\s*$/gm, '');
+
+	// 7. Detect and fence command-line output blocks
+	// Pattern: lines starting with → or containing command patterns
+	const lines = md.split('\n');
+	const result = [];
+	let inCodeBlock = false;
+	let codeBlockLines = [];
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const trimmed = line.trim();
+
+		// Detect log/output patterns:
+		// - Lines starting with → (arrow)
+		// - Lines starting with [ followed by Stage/Step
+		// - Lines with patterns like "→ verb" or "– item"
+		const isLogLine = /^[→\u2192]/.test(trimmed) ||
+			/^\[Stage \d+/.test(trimmed) ||
+			/^[–\-]\s+\w+.*[→\u2192✅❌]/.test(trimmed);
+
+		// Detect command patterns:
+		// - python -m, npm run, node, etc.
+		const isCommandLine = /^(python|npm|node|yarn|pnpm|cargo|go|ruby|java|mvn|gradle)\s+/.test(trimmed) ||
+			/^[A-Z_]+=[^\s]+\s/.test(trimmed);  // ENV=value pattern
+
+		if (isLogLine || isCommandLine) {
+			if (!inCodeBlock) {
+				inCodeBlock = true;
+				codeBlockLines = [];
+			}
+			codeBlockLines.push(line);
+		} else {
+			if (inCodeBlock) {
+				// End of code block - flush it
+				if (codeBlockLines.length > 0) {
+					result.push('```');
+					result.push(...codeBlockLines);
+					result.push('```');
+				}
+				inCodeBlock = false;
+				codeBlockLines = [];
+			}
+			result.push(line);
+		}
+	}
+
+	// Flush any remaining code block
+	if (inCodeBlock && codeBlockLines.length > 0) {
+		result.push('```');
+		result.push(...codeBlockLines);
+		result.push('```');
+	}
+
+	md = result.join('\n');
+
+	// 8. Clean up lines that are just whitespace or isolated formatting fragments
+	md = md.replace(/^\s+$/gm, '');
+
+	// 9. Final whitespace normalization - collapse multiple blank lines
+	md = md.replace(/\n{3,}/g, '\n\n');
+
+	return md;
+}
+
+/**
  * Detect and convert space/tab-separated pseudo-tables to GFM table syntax
  * This handles cases where tables are formatted with spaces/tabs instead of pipes
  * @param {string} markdown - Raw markdown content
@@ -538,8 +635,10 @@ function rehypeStyleTables() {
 }
 
 async function mdToHtml(markdown) {
+	// Clean up markup edge cases (bold in headings, bullet chars, callouts, etc.)
+	const cleanedMarkdown = cleanupMarkdownEdgeCases(markdown);
 	// Convert pseudo-tables (tab/space-separated) to GFM format before processing
-	const processedMarkdown = convertPseudoTablesToGfm(markdown);
+	const processedMarkdown = convertPseudoTablesToGfm(cleanedMarkdown);
 
 	// Allow code/pre/table/figure/figcaption in sanitation
 	const schema = structuredClone(defaultSchema);
@@ -1413,6 +1512,7 @@ export {
 	trimToExcerpt,
 	getUniqueId,
 	mdToHtml,
+	cleanupMarkdownEdgeCases,
 	convertPseudoTablesToGfm,
 	resolveToRawUrl,
 	rewriteImageLinksInMarkdown,

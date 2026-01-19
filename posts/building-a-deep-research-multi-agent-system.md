@@ -19,7 +19,7 @@ July 28, 2025
 
 Authors: 
 
-  * Bharat Sharma
+  * Bharat Sharmas
 
 Editors:
 
