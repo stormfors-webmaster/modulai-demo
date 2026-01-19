@@ -8,6 +8,19 @@ import { logger } from "./logger.js";
 import { sleep } from "./retry.js";
 
 /**
+ * Default rate limiter configuration
+ * Based on Webflow API limits: https://developers.webflow.com/docs/rate-limits
+ */
+export const DEFAULT_RATE_LIMIT_CONFIG = {
+	/** Maximum requests allowed per time window (Webflow allows ~120/min) */
+	MAX_REQUESTS_PER_WINDOW: 120,
+	/** Time window in milliseconds (1 minute) */
+	WINDOW_MS: 60000,
+	/** Default backoff time in ms when no Retry-After header is provided */
+	DEFAULT_BACKOFF_MS: 60000,
+};
+
+/**
  * Rate limiter with 429 response handling and backoff support
  */
 export class RateLimiter {
@@ -17,8 +30,8 @@ export class RateLimiter {
 	 * @param {number} [options.windowMs=60000] - Window size in milliseconds
 	 */
 	constructor(options = {}) {
-		this.maxRequests = options.maxRequests || 120;
-		this.windowMs = options.windowMs || 60000;
+		this.maxRequests = options.maxRequests || DEFAULT_RATE_LIMIT_CONFIG.MAX_REQUESTS_PER_WINDOW;
+		this.windowMs = options.windowMs || DEFAULT_RATE_LIMIT_CONFIG.WINDOW_MS;
 		this.requests = [];
 		this.backoffUntil = 0; // Timestamp when backoff ends
 	}
@@ -64,7 +77,7 @@ export class RateLimiter {
 	 * @returns {number} Backoff time in milliseconds
 	 */
 	recordRateLimitHit(response) {
-		const retryAfterMs = parseRetryAfter(response) || 60000; // Default 60s
+		const retryAfterMs = parseRetryAfter(response) || DEFAULT_RATE_LIMIT_CONFIG.DEFAULT_BACKOFF_MS;
 		this.backoffUntil = Date.now() + retryAfterMs;
 
 		logger.warn("429 Rate limit hit - recording backoff", {
