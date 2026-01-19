@@ -5,8 +5,8 @@ on:
     paths:
       - "posts/**/*.md"
       - "tools/**/*.js"
-      - "tools/package.json"
-      - "tools/package-lock.json"
+      - "package.json"
+      - "package-lock.json"
 
 permissions:
   contents: read
@@ -21,19 +21,16 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: "tools/package-lock.json"
+          cache-dependency-path: "package-lock.json"
 
       - name: Install deps
         run: npm ci
-        working-directory: tools
 
       - name: Run Biome linter
         run: npm run lint
-        working-directory: tools
 
       - name: Run unit tests
         run: npm test
-        working-directory: tools
 
       - name: Validate frontmatter schema
         run: node tools/validate-frontmatter.js

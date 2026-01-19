@@ -30,11 +30,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: "tools/package-lock.json"
+          cache-dependency-path: "package-lock.json"
 
       - name: Install deps
         run: npm ci
-        working-directory: tools
 
       - name: Re-sync all
         run: node tools/sync-webflow.js --all ${{ inputs.dry_run && '--dry-run' || '' }}

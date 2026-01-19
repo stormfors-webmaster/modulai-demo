@@ -13,8 +13,6 @@ seo:
   description: "In a world overwhelmed by information, our deep research system offers a new approach to document analysis—not by summarising, but by uncovering what’s missing."
 ---
 
-![](https://modulai.io/app/uploads/2025/07/ChatGPT-Image-Jul-29-2025-04_23_13-PM.png)
-
 July 28, 2025
 
 #  Building a Deep Research Multi-Agent System 

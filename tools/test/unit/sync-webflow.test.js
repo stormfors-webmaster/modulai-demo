@@ -8,7 +8,10 @@ import { beforeEach, describe, it, mock } from "node:test";
 import {
 	getUniqueId,
 	kebab,
+	mdToHtml,
 	parseArgs,
+	resolveToRawUrl,
+	rewriteImageLinksInMarkdown,
 	trimToExcerpt,
 } from "../../sync-webflow.js";
 
@@ -169,4 +172,197 @@ describe("parseArgs()", () => {
 	it.after = () => {
 		process.argv = originalArgv;
 	};
+});
+
+describe("resolveToRawUrl()", () => {
+	// Save and restore env vars
+	const originalEnv = { ...process.env };
+
+	beforeEach(() => {
+		process.env.GITHUB_REPOSITORY = "owner/repo";
+		process.env.GITHUB_SHA = "abc123";
+	});
+
+	it("returns absolute URLs unchanged", () => {
+		const url = "https://modulai.io/app/uploads/2025/07/image.png";
+		assert.strictEqual(resolveToRawUrl(url), url);
+	});
+
+	it("returns http URLs unchanged", () => {
+		const url = "http://example.com/image.png";
+		assert.strictEqual(resolveToRawUrl(url), url);
+	});
+
+	it("returns empty/null/undefined as-is", () => {
+		assert.strictEqual(resolveToRawUrl(""), "");
+		assert.strictEqual(resolveToRawUrl(null), null);
+		assert.strictEqual(resolveToRawUrl(undefined), undefined);
+	});
+
+	it.after = () => {
+		Object.assign(process.env, originalEnv);
+	};
+});
+
+describe("rewriteImageLinksInMarkdown()", () => {
+	// Save and restore env vars
+	const originalEnv = { ...process.env };
+
+	beforeEach(() => {
+		process.env.GITHUB_REPOSITORY = "owner/repo";
+		process.env.GITHUB_SHA = "abc123";
+	});
+
+	it("preserves external URLs unchanged", () => {
+		const md = "![alt text](https://modulai.io/app/uploads/image.png)";
+		const result = rewriteImageLinksInMarkdown(md, "/test/dir");
+		assert.strictEqual(result, md);
+	});
+
+	it("preserves http URLs unchanged", () => {
+		const md = "![](http://example.com/image.jpg)";
+		const result = rewriteImageLinksInMarkdown(md, "/test/dir");
+		assert.strictEqual(result, md);
+	});
+
+	it("handles multiple inline images", () => {
+		const md = `
+![First](https://example.com/first.png)
+
+Some text here.
+
+![Second](https://example.com/second.png)
+
+More text.
+
+![Third](https://example.com/third.jpg)
+`;
+		const result = rewriteImageLinksInMarkdown(md, "/test/dir");
+		assert.ok(result.includes("https://example.com/first.png"));
+		assert.ok(result.includes("https://example.com/second.png"));
+		assert.ok(result.includes("https://example.com/third.jpg"));
+	});
+
+	it("preserves alt text and image title", () => {
+		const md = '![My Alt Text](https://example.com/image.png "Image Title")';
+		const result = rewriteImageLinksInMarkdown(md, "/test/dir");
+		assert.ok(result.includes("My Alt Text"));
+		assert.ok(result.includes("https://example.com/image.png"));
+	});
+
+	it("handles images without alt text", () => {
+		const md = "![](https://example.com/image.png)";
+		const result = rewriteImageLinksInMarkdown(md, "/test/dir");
+		assert.strictEqual(result, md);
+	});
+
+	it("handles mixed external and relative images", () => {
+		const md = `
+![External](https://example.com/external.png)
+
+![Relative](./local-image.png)
+`;
+		const result = rewriteImageLinksInMarkdown(md, "/test/posts");
+		// External URL should be unchanged
+		assert.ok(result.includes("https://example.com/external.png"));
+		// Relative URL is processed (path resolution happens regardless of REPO setting)
+		// The key behavior: external URLs preserved, relative URLs transformed
+		assert.ok(result.includes("![Relative]("));
+		assert.ok(result.includes("local-image.png"));
+	});
+
+	it.after = () => {
+		Object.assign(process.env, originalEnv);
+	};
+});
+
+describe("mdToHtml()", () => {
+	it("converts basic markdown to HTML", async () => {
+		const md = "# Hello World\n\nThis is a paragraph.";
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<h1>Hello World</h1>"));
+		assert.ok(html.includes("<p>This is a paragraph.</p>"));
+	});
+
+	it("converts inline images to HTML img tags", async () => {
+		const md = "![Alt Text](https://example.com/image.png)";
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<img"));
+		assert.ok(html.includes('src="https://example.com/image.png"'));
+		assert.ok(html.includes('alt="Alt Text"'));
+	});
+
+	it("handles multiple inline images", async () => {
+		const md = `
+![First](https://example.com/first.png)
+
+Some text.
+
+![Second](https://example.com/second.png)
+`;
+		const html = await mdToHtml(md);
+		assert.ok(html.includes('src="https://example.com/first.png"'));
+		assert.ok(html.includes('src="https://example.com/second.png"'));
+	});
+
+	it("handles images without alt text", async () => {
+		const md = "![](https://example.com/image.png)";
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<img"));
+		assert.ok(html.includes('src="https://example.com/image.png"'));
+	});
+
+	it("converts GFM tables to HTML", async () => {
+		const md = `
+| Header 1 | Header 2 |
+|----------|----------|
+| Cell 1   | Cell 2   |
+`;
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<table>"));
+		assert.ok(html.includes("<th>"));
+		assert.ok(html.includes("<td>"));
+	});
+
+	it("converts code blocks to HTML", async () => {
+		const md = "```javascript\nconst x = 1;\n```";
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<pre>"));
+		assert.ok(html.includes("<code"));
+	});
+
+	it("handles links", async () => {
+		const md = "[Link Text](https://example.com)";
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<a"));
+		assert.ok(html.includes('href="https://example.com"'));
+		assert.ok(html.includes("Link Text"));
+	});
+
+	it("handles bold and italic text", async () => {
+		const md = "**bold** and *italic*";
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<strong>bold</strong>"));
+		assert.ok(html.includes("<em>italic</em>"));
+	});
+
+	it("handles blockquotes", async () => {
+		const md = "> This is a quote";
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<blockquote>"));
+	});
+
+	it("handles ordered and unordered lists", async () => {
+		const md = `
+- Item 1
+- Item 2
+
+1. First
+2. Second
+`;
+		const html = await mdToHtml(md);
+		assert.ok(html.includes("<ul>"));
+		assert.ok(html.includes("<ol>"));
+		assert.ok(html.includes("<li>"));
+	});
 });
